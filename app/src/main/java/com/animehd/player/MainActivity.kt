@@ -164,8 +164,48 @@ class MainActivity : AppCompatActivity() {
             }
             videoItems = found.sortedWith { a, b -> naturalCompare(a.name, b.name) }
             statusText.text = "Found ${videoItems.size} phone video(s) • Episode-number order"
-            if (videoItems.isNotEmpty()) showEpisodes()
-            else emptyMessage.text = "No indexed videos found. Save Telegram videos to Downloads or Movies first."
+            if (videoItems.isNotEmpty()) {
+                emptyMessage.text = "${videoItems.size} videos • Tap a thumbnail to play"
+                videoGrid.adapter = object : BaseAdapter() {
+                    override fun getCount() = videoItems.size
+                    override fun getItem(position: Int) = videoItems[position]
+                    override fun getItemId(position: Int) = videoItems[position].id
+                    override fun getView(position: Int, convertView: android.view.View?, parent: ViewGroup): android.view.View {
+                        val item = videoItems[position]
+                        val tile = convertView as? LinearLayout ?: LinearLayout(this@MainActivity).apply {
+                            orientation = LinearLayout.VERTICAL
+                            setPadding(5, 5, 5, 9)
+                        }
+                        tile.removeAllViews()
+                        val thumb = ImageView(this@MainActivity).apply {
+                            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 140)
+                            scaleType = ImageView.ScaleType.CENTER_CROP
+                            setBackgroundColor(0xFF292832.toInt())
+                        }
+                        try {
+                            thumb.setImageBitmap(MediaStore.Video.Thumbnails.getThumbnail(
+                                contentResolver, item.id, MediaStore.Video.Thumbnails.MINI_KIND, null
+                            ))
+                        } catch (_: Exception) { }
+                        val label = TextView(this@MainActivity).apply {
+                            text = item.name
+                            setTextColor(0xFFFFFFFF.toInt())
+                            textSize = 12f
+                            maxLines = 2
+                            ellipsize = android.text.TextUtils.TruncateAt.END
+                            setPadding(2, 6, 2, 0)
+                        }
+                        tile.addView(thumb)
+                        tile.addView(label)
+                        tile.setOnClickListener { playVideo(item.uri, item.name) }
+                        return tile
+                    }
+                }
+                videoGrid.visibility = android.view.View.VISIBLE
+            } else {
+                emptyMessage.text = "No indexed videos found. Save Telegram videos to Downloads or Movies first."
+                videoGrid.visibility = android.view.View.GONE
+            }
         } catch (_: SecurityException) {
             statusText.text = "Storage access was limited. Allow video access in Android app settings."
         } catch (e: Exception) {
