@@ -55,6 +55,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var storageButton: MaterialButton
     private lateinit var episodesButton: MaterialButton
     private lateinit var audioButton: MaterialButton
+    private lateinit var enhanceButton: MaterialButton
     private lateinit var videoGrid: GridView
     private lateinit var playPauseButton: MaterialButton
     private lateinit var seekBackButton: MaterialButton
@@ -80,6 +81,10 @@ class MainActivity : AppCompatActivity() {
     }
     private var videoItems: List<VideoEntry> = emptyList()
     private var fullscreen = false
+    private var enhancementEnabled = false
+    private var currentVideoUri: Uri? = null
+    private var currentVideoName: String = "Video"
+    private var pendingSeekMs: Long = 0L
     private data class VideoEntry(val name: String, val uri: Uri, val id: Long)
 
     private val openVideo = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -108,6 +113,7 @@ class MainActivity : AppCompatActivity() {
         storageButton = findViewById(R.id.folderButton)
         episodesButton = findViewById(R.id.episodesButton)
         audioButton = findViewById(R.id.audioButton)
+        enhanceButton = findViewById(R.id.enhanceButton)
         videoGrid = findViewById(R.id.videoGrid)
         playPauseButton = findViewById(R.id.playPauseButton)
         seekBackButton = findViewById(R.id.seekBackButton)
@@ -137,6 +143,18 @@ class MainActivity : AppCompatActivity() {
         storageButton.setOnClickListener { requestPhoneVideoAccess() }
         episodesButton.setOnClickListener { showEpisodes() }
         audioButton.setOnClickListener { showTrackOptions() }
+        enhanceButton.setOnClickListener {
+            val uri = currentVideoUri
+            if (uri == null) {
+                statusText.text = "Open a video before enabling Auto Enhance."
+            } else {
+                enhancementEnabled = !enhancementEnabled
+                pendingSeekMs = player?.time?.coerceAtLeast(0L) ?: 0L
+                enhanceButton.text = if (enhancementEnabled) "Enhance: ON" else "Auto Enhance"
+                statusText.text = if (enhancementEnabled) "Applying automatic video enhancement…" else "Automatic enhancement turned off"
+                playVideo(uri, currentVideoName)
+            }
+        }
         uiHandler.post(progressUpdater)
         initializePlayer()
         handleIncomingIntent(intent)
@@ -275,7 +293,15 @@ class MainActivity : AppCompatActivity() {
                         when (event.type) {
                             MediaPlayer.Event.Opening -> statusText.text = "Opening video…"
                             MediaPlayer.Event.Buffering -> statusText.text = "Buffering…"
-                            MediaPlayer.Event.Playing -> { statusText.text = "Playing • VLC engine • Offline • No ads"; playPauseButton.text = "Ⅱ" }
+                            MediaPlayer.Event.Playing -> {
+                                statusText.text = if (enhancementEnabled) "Auto Enhance active • VLC engine" else "Playing • VLC engine • Offline • No ads"
+                                playPauseButton.text = "Ⅱ"
+                                if (pendingSeekMs > 0L) {
+                                    val restoreAt = pendingSeekMs
+                                    pendingSeekMs = 0L
+                                    mediaPlayer.time = restoreAt.coerceAtMost(mediaPlayer.length.coerceAtLeast(0L))
+                                }
+                            }
                             MediaPlayer.Event.Paused -> { statusText.text = "Paused"; playPauseButton.text = "▶" }
                             MediaPlayer.Event.EndReached -> statusText.text = "Playback finished"
                             MediaPlayer.Event.EncounteredError -> statusText.text = "VLC could not decode this file. Try another copy or format."
@@ -296,6 +322,8 @@ class MainActivity : AppCompatActivity() {
             statusText.text = "Player engine did not start. Please reopen the app."
             return
         }
+        currentVideoUri = uri
+        currentVideoName = name
         emptyMessage.text = name
         enterFullscreen()
         try {
@@ -311,6 +339,15 @@ class MainActivity : AppCompatActivity() {
             currentVideoFd = descriptor
             val media = Media(vlc, descriptor.fileDescriptor)
             media.setHWDecoderEnabled(true, false)
+            if (enhancementEnabled) {
+                // LibVLC adjust filter performs playback-time image processing.
+                // This is conventional enhancement, not AI upscaling.
+                media.addOption(":video-filter=adjust")
+                media.addOption(":contrast=1.12")
+                media.addOption(":brightness=1.03")
+                media.addOption(":saturation=1.12")
+                media.addOption(":gamma=1.0")
+            }
             mediaPlayer.media = media
             media.release()
             mediaPlayer.play()
