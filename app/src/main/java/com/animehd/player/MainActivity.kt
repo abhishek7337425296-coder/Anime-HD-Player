@@ -135,7 +135,7 @@ class MainActivity : AppCompatActivity() {
     // VLC software gain: 100% is normal device output; up to 200% amplifies in the player.
     private var softwareVolumePercent = 100
     private val hideControlsRunnable = Runnable {
-        if (fullscreen && player?.isPlaying == true) setControlsVisible(false)
+        if (fullscreen && (if (media3Active) exoPlayer?.isPlaying == true else player?.isPlaying == true)) setControlsVisible(false)
     }
     private val hideHudRunnable = Runnable { gestureHud.visibility = View.GONE }
     private data class VideoEntry(val name: String, val uri: Uri, val id: Long)
@@ -213,7 +213,7 @@ class MainActivity : AppCompatActivity() {
                 userSeeking = false
             }
         })
-        backButton.setOnClickListener { player?.stop(); exitFullscreen() }
+        backButton.setOnClickListener { player?.stop(); exoPlayer?.pause(); exitFullscreen() }
         openVideoButton.setOnClickListener { openVideo.launch(arrayOf("video/*")) }
         storageButton.setOnClickListener { requestPhoneVideoAccess() }
         episodesButton.setOnClickListener { showEpisodes() }
@@ -224,7 +224,7 @@ class MainActivity : AppCompatActivity() {
                 statusText.text = "Open a video before enabling HD Enhance."
             } else {
                 hdEnhancementEnabled = !hdEnhancementEnabled
-                pendingSeekMs = player?.time?.coerceAtLeast(0L) ?: 0L
+                pendingSeekMs = if (media3Active) (exoPlayer?.currentPosition ?: 0L) else (player?.time ?: 0L).coerceAtLeast(0L)
                 hdButton.text = if (hdEnhancementEnabled) "HD: ON" else "HD: OFF"
                 statusText.text = if (hdEnhancementEnabled)
                     "Applying real-time edge sharpening…"
@@ -616,7 +616,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun scheduleHideControls() {
         uiHandler.removeCallbacks(hideControlsRunnable)
-        if (fullscreen && player?.isPlaying == true) {
+        if (fullscreen && (if (media3Active) exoPlayer?.isPlaying == true else player?.isPlaying == true)) {
             uiHandler.postDelayed(hideControlsRunnable, 3000L)
         }
     }
@@ -700,10 +700,16 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun seekBy(offsetMs: Long) {
-        val mp = player ?: return
-        val length = mp.length
-        if (length <= 0L || !mp.isSeekable) return
-        mp.setTime((mp.time + offsetMs).coerceIn(0L, length))
+        if (media3Active) {
+            val ep = exoPlayer ?: return
+            val length = ep.duration
+            if (length > 0L) ep.seekTo((ep.currentPosition + offsetMs).coerceIn(0L, length))
+        } else {
+            val mp = player ?: return
+            val length = mp.length
+            if (length <= 0L || !mp.isSeekable) return
+            mp.setTime((mp.time + offsetMs).coerceIn(0L, length))
+        }
     }
 
     private fun formatTime(milliseconds: Long): String {
@@ -741,7 +747,7 @@ class MainActivity : AppCompatActivity() {
         MaterialAlertDialogBuilder(this)
             .setTitle("Playback speed")
             .setItems(speeds) { _, which ->
-                player?.setRate(rates[which])
+                if (media3Active) exoPlayer?.setPlaybackSpeed(rates[which]) else player?.setRate(rates[which])
                 statusText.text = "Playback speed: ${speeds[which]}"
             }
             .setNegativeButton("Close", null)
@@ -851,6 +857,10 @@ class MainActivity : AppCompatActivity() {
         uiHandler.removeCallbacks(hideControlsRunnable)
         uiHandler.removeCallbacks(hideHudRunnable)
         player?.stop()
+        exoPlayer?.release()
+        exoPlayer = null
+        media3View.player = null
+        media3Active = false
         currentVideoFd?.close()
         currentVideoFd = null
         player?.detachViews()
