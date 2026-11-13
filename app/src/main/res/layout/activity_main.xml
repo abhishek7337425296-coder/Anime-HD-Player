@@ -1,12 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/rootLayout"
-    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
     android:background="#101014"
-    android:padding="16dp">
+    android:padding="12dp">
+
     <TextView
         android:id="@+id/titleView"
         android:layout_width="match_parent"
@@ -15,32 +15,49 @@
         android:textColor="#FFFFFF"
         android:textSize="24sp"
         android:textStyle="bold"
-        android:paddingBottom="12dp" />
+        android:paddingBottom="8dp" />
+
     <TextView
         android:id="@+id/emptyMessage"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="Open a video or scan your phone storage."
+        android:text="Your videos"
         android:textColor="#C8C5D0"
         android:textSize="14sp"
-        android:paddingBottom="12dp" />
-    <GridView\n        android:id="@+id/videoGrid"\n        android:layout_width="match_parent"\n        android:layout_height="0dp"\n        android:layout_weight="1"\n        android:numColumns="2"\n        android:verticalSpacing="8dp"\n        android:horizontalSpacing="8dp"\n        android:stretchMode="columnWidth"\n        android:visibility="visible" />\n    <org.videolan.libvlc.util.VLCVideoLayout
+        android:paddingBottom="8dp" />
+
+    <GridView
+        android:id="@+id/videoGrid"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:numColumns="2"
+        android:verticalSpacing="8dp"
+        android:horizontalSpacing="8dp"
+        android:stretchMode="columnWidth"
+        android:visibility="visible" />
+
+    <org.videolan.libvlc.util.VLCVideoLayout
         android:id="@+id/playerView"
         android:layout_width="match_parent"
         android:layout_height="0dp"
-        android:layout_weight="1" />
+        android:layout_weight="1"
+        android:visibility="gone" />
+
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
         android:gravity="center"
-        android:paddingTop="10dp">
+        android:paddingTop="8dp">
+
         <com.google.android.material.button.MaterialButton
             android:id="@+id/openVideoButton"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
             android:text="Open video" />
+
         <com.google.android.material.button.MaterialButton
             android:id="@+id/folderButton"
             style="@style/Widget.MaterialComponents.Button.OutlinedButton"
@@ -48,13 +65,15 @@
             android:layout_height="wrap_content"
             android:layout_weight="1"
             android:layout_marginStart="6dp"
-            android:text="Phone videos" />
+            android:text="Refresh videos" />
     </LinearLayout>
+
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
         android:gravity="center">
+
         <com.google.android.material.button.MaterialButton
             android:id="@+id/episodesButton"
             style="@style/Widget.MaterialComponents.Button.OutlinedButton"
@@ -62,6 +81,7 @@
             android:layout_height="wrap_content"
             android:layout_weight="1"
             android:text="Episodes" />
+
         <com.google.android.material.button.MaterialButton
             android:id="@+id/audioButton"
             style="@style/Widget.MaterialComponents.Button.OutlinedButton"
@@ -71,6 +91,30 @@
             android:layout_marginStart="6dp"
             android:text="Audio / CC" />
     </LinearLayout>
+
+    <LinearLayout
+        android:id="@+id/playbackControls"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center"
+        android:visibility="gone">
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/backButton"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Back to videos" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/playPauseButton"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Play / Pause" />
+    </LinearLayout>
+
     <TextView
         android:id="@+id/statusText"
         android:layout_width="match_parent"
@@ -79,5 +123,5 @@
         android:textColor="#A9A5B2"
         android:textSize="12sp"
         android:gravity="center"
-        android:paddingTop="8dp" />
+        android:paddingTop="6dp" />
 </LinearLayout>
