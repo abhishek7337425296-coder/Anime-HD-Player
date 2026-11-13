@@ -72,6 +72,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var episodesButton: MaterialButton
     private lateinit var audioButton: MaterialButton
     private lateinit var enhanceButton: MaterialButton
+    private lateinit var hdButton: MaterialButton
     private lateinit var videoGrid: GridView
     private lateinit var playPauseButton: MaterialButton
     private lateinit var seekBackButton: MaterialButton
@@ -98,6 +99,8 @@ class MainActivity : AppCompatActivity() {
     private var videoItems: List<VideoEntry> = emptyList()
     private var fullscreen = false
     private var enhancementEnabled = false
+    // Display scaling only: this does not change the video's encoded resolution.
+    private var hdAutoFitEnabled = true
     private var currentVideoUri: Uri? = null
     private var currentVideoName: String = "Video"
     private var pendingSeekMs: Long = 0L
@@ -149,6 +152,7 @@ class MainActivity : AppCompatActivity() {
         episodesButton = findViewById(R.id.episodesButton)
         audioButton = findViewById(R.id.audioButton)
         enhanceButton = findViewById(R.id.enhanceButton)
+        hdButton = findViewById(R.id.hdButton)
         videoGrid = findViewById(R.id.videoGrid)
         playPauseButton = findViewById(R.id.playPauseButton)
         seekBackButton = findViewById(R.id.seekBackButton)
@@ -180,6 +184,23 @@ class MainActivity : AppCompatActivity() {
         storageButton.setOnClickListener { requestPhoneVideoAccess() }
         episodesButton.setOnClickListener { showEpisodes() }
         audioButton.setOnClickListener { showTrackOptions(); revealControls() }
+        hdButton.setOnClickListener {
+            val mp = player
+            if (currentVideoUri == null || mp == null) {
+                statusText.text = "Open a video before changing HD display mode."
+            } else {
+                hdAutoFitEnabled = !hdAutoFitEnabled
+                // LibVLC scale 0 means fit the video to the available view;
+                // 1 means native pixel size. Neither mode creates extra detail.
+                mp.setScale(if (hdAutoFitEnabled) 0f else 1f)
+                hdButton.text = if (hdAutoFitEnabled) "HD: AUTO" else "HD: 1:1"
+                statusText.text = if (hdAutoFitEnabled)
+                    "Auto fit enabled • original video quality • no AI upscaling"
+                else
+                    "Original pixel size • source resolution unchanged"
+            }
+            revealControls()
+        }
         enhanceButton.setOnClickListener {
             val uri = currentVideoUri
             if (uri == null) {
@@ -331,6 +352,8 @@ class MainActivity : AppCompatActivity() {
                             MediaPlayer.Event.Opening -> statusText.text = "Opening video…"
                             MediaPlayer.Event.Buffering -> statusText.text = "Buffering…"
                             MediaPlayer.Event.Playing -> {
+                                mediaPlayer.setScale(if (hdAutoFitEnabled) 0f else 1f)
+                                hdButton.text = if (hdAutoFitEnabled) "HD: AUTO" else "HD: 1:1"
                                 statusText.text = if (enhancementEnabled) "Color enhancement active • software decoding" else "Playing • VLC engine • Offline • No ads"
                                 scheduleHideControls()
                                 playPauseButton.text = "Ⅱ"
