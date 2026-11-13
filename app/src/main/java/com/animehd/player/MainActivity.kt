@@ -12,6 +12,12 @@ import android.os.ParcelFileDescriptor
 import android.provider.MediaStore
 import android.provider.OpenableColumns
 import android.widget.TextView
+import android.widget.GridView
+import android.widget.BaseAdapter
+import android.widget.ImageView
+import android.widget.FrameLayout
+import android.view.Gravity
+import android.view.ViewGroup
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
@@ -40,9 +46,12 @@ class MainActivity : AppCompatActivity() {
     private lateinit var storageButton: MaterialButton
     private lateinit var episodesButton: MaterialButton
     private lateinit var audioButton: MaterialButton
+    private lateinit var videoGrid: GridView
+    private lateinit var playPauseButton: MaterialButton
+    private lateinit var backButton: MaterialButton
     private var videoItems: List<VideoEntry> = emptyList()
     private var fullscreen = false
-    private data class VideoEntry(val name: String, val uri: Uri)
+    private data class VideoEntry(val name: String, val uri: Uri, val id: Long)
 
     private val openVideo = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri?.let { playVideo(it, displayName(it)) }
@@ -65,12 +74,19 @@ class MainActivity : AppCompatActivity() {
         storageButton = findViewById(R.id.folderButton)
         episodesButton = findViewById(R.id.episodesButton)
         audioButton = findViewById(R.id.audioButton)
+        videoGrid = findViewById(R.id.videoGrid)
+        playPauseButton = findViewById(R.id.playPauseButton)
+        backButton = findViewById(R.id.backButton)
+        videoLayout.visibility = android.view.View.GONE
+        playPauseButton.setOnClickListener { player?.let { if (it.isPlaying) it.pause() else it.play() } }
+        backButton.setOnClickListener { player?.stop(); exitFullscreen() }
         openVideoButton.setOnClickListener { openVideo.launch(arrayOf("video/*")) }
         storageButton.setOnClickListener { requestPhoneVideoAccess() }
         episodesButton.setOnClickListener { showEpisodes() }
         audioButton.setOnClickListener { showTrackOptions() }
         initializePlayer()
         handleIncomingIntent(intent)
+        if (intent?.action == Intent.ACTION_MAIN) requestPhoneVideoAccess()
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -139,7 +155,7 @@ class MainActivity : AppCompatActivity() {
                 while (cursor.moveToNext()) {
                     val id = cursor.getLong(idColumn)
                     val name = cursor.getString(nameColumn) ?: "Video"
-                    found.add(VideoEntry(name, ContentUris.withAppendedId(collection, id)))
+                    found.add(VideoEntry(name, ContentUris.withAppendedId(collection, id), id))
                 }
             }
             videoItems = found.sortedWith { a, b -> naturalCompare(a.name, b.name) }
@@ -216,12 +232,16 @@ class MainActivity : AppCompatActivity() {
         fullscreen = true
         requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
         titleView.visibility = android.view.View.GONE
+        videoGrid.visibility = android.view.View.GONE
+        videoLayout.visibility = android.view.View.VISIBLE
+        backButton.visibility = android.view.View.VISIBLE
+        playPauseButton.visibility = android.view.View.VISIBLE
         emptyMessage.visibility = android.view.View.GONE
         openVideoButton.visibility = android.view.View.GONE
         storageButton.visibility = android.view.View.GONE
         episodesButton.visibility = android.view.View.GONE
         audioButton.visibility = android.view.View.GONE
-        statusText.visibility = android.view.View.GONE
+        statusText.visibility = android.view.View.VISIBLE
         rootLayout.setPadding(0, 0, 0, 0)
         videoLayout.layoutParams = videoLayout.layoutParams.apply {
             height = 0
@@ -236,6 +256,10 @@ class MainActivity : AppCompatActivity() {
         fullscreen = false
         requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
         titleView.visibility = android.view.View.VISIBLE
+        videoLayout.visibility = android.view.View.GONE
+        videoGrid.visibility = android.view.View.VISIBLE
+        backButton.visibility = android.view.View.GONE
+        playPauseButton.visibility = android.view.View.GONE
         emptyMessage.visibility = android.view.View.VISIBLE
         openVideoButton.visibility = android.view.View.VISIBLE
         storageButton.visibility = android.view.View.VISIBLE
