@@ -17,6 +17,9 @@ import android.widget.GridView
 import android.widget.BaseAdapter
 import android.widget.ImageView
 import android.widget.FrameLayout
+import android.widget.SeekBar
+import android.os.Handler
+import android.os.Looper
 import android.view.Gravity
 import android.view.ViewGroup
 import androidx.activity.result.contract.ActivityResultContracts
@@ -39,6 +42,11 @@ class MainActivity : AppCompatActivity() {
     private var player: MediaPlayer? = null
     private var currentVideoFd: ParcelFileDescriptor? = null
     private lateinit var videoLayout: VLCVideoLayout
+    private lateinit var videoContainer: FrameLayout
+    private lateinit var seekBar: SeekBar
+    private lateinit var currentTimeText: TextView
+    private lateinit var durationText: TextView
+    private lateinit var settingsButton: MaterialButton
     private lateinit var statusText: TextView
     private lateinit var emptyMessage: TextView
     private lateinit var rootLayout: android.widget.LinearLayout
@@ -50,7 +58,24 @@ class MainActivity : AppCompatActivity() {
     private lateinit var videoGrid: GridView
     private lateinit var playPauseButton: MaterialButton
     private lateinit var backButton: MaterialButton
-    private lateinit var playbackControls: android.widget.LinearLayout
+    private val uiHandler = Handler(Looper.getMainLooper())
+    private var userSeeking = false
+    private val progressUpdater = object : Runnable {
+        override fun run() {
+            val mp = player
+            if (mp != null && fullscreen && !userSeeking) {
+                val length = mp.length.coerceAtLeast(0L)
+                val time = mp.time.coerceAtLeast(0L)
+                if (length > 0L) {
+                    seekBar.progress = ((time * 1000L) / length).toInt().coerceIn(0, 1000)
+                    durationText.text = formatTime(length)
+                    currentTimeText.text = formatTime(time)
+                }
+                playPauseButton.text = if (mp.isPlaying) "Ⅱ" else "▶"
+            }
+            uiHandler.postDelayed(this, 500L)
+        }
+    }
     private var videoItems: List<VideoEntry> = emptyList()
     private var fullscreen = false
     private data class VideoEntry(val name: String, val uri: Uri, val id: Long)
@@ -70,6 +95,11 @@ class MainActivity : AppCompatActivity() {
         rootLayout = findViewById(R.id.rootLayout)
         titleView = findViewById(R.id.titleView)
         videoLayout = findViewById(R.id.playerView)
+        videoContainer = findViewById(R.id.videoContainer)
+        seekBar = findViewById(R.id.seekBar)
+        currentTimeText = findViewById(R.id.currentTimeText)
+        durationText = findViewById(R.id.durationText)
+        settingsButton = findViewById(R.id.settingsButton)
         statusText = findViewById(R.id.statusText)
         emptyMessage = findViewById(R.id.emptyMessage)
         openVideoButton = findViewById(R.id.openVideoButton)
@@ -79,15 +109,29 @@ class MainActivity : AppCompatActivity() {
         videoGrid = findViewById(R.id.videoGrid)
         playPauseButton = findViewById(R.id.playPauseButton)
         backButton = findViewById(R.id.backButton)
-        playbackControls = findViewById(R.id.playbackControls)
-        playbackControls.visibility = android.view.View.GONE
-        videoLayout.visibility = android.view.View.GONE
-        playPauseButton.setOnClickListener { player?.let { if (it.isPlaying) it.pause() else it.play() } }
+        videoContainer.visibility = android.view.View.GONE
+        playPauseButton.setOnClickListener { player?.let { if (it.isPlaying) { it.pause(); playPauseButton.text = "▶" } else { it.play(); playPauseButton.text = "Ⅱ" } } }
+        settingsButton.setOnClickListener { showPlaybackSettings() }
+        seekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(bar: SeekBar?, progress: Int, fromUser: Boolean) {
+                if (fromUser) {
+                    val length = player?.length ?: 0L
+                    if (length > 0L) currentTimeText.text = formatTime(length * progress / 1000L)
+                }
+            }
+            override fun onStartTrackingTouch(bar: SeekBar?) { userSeeking = true }
+            override fun onStopTrackingTouch(bar: SeekBar?) {
+                val length = player?.length ?: 0L
+                if (length > 0L) player?.setTime(length * (bar?.progress ?: 0) / 1000L)
+                userSeeking = false
+            }
+        })
         backButton.setOnClickListener { player?.stop(); exitFullscreen() }
         openVideoButton.setOnClickListener { openVideo.launch(arrayOf("video/*")) }
         storageButton.setOnClickListener { requestPhoneVideoAccess() }
         episodesButton.setOnClickListener { showEpisodes() }
         audioButton.setOnClickListener { showTrackOptions() }
+        uiHandler.post(progressUpdater)
         initializePlayer()
         handleIncomingIntent(intent)
         if (intent?.action == Intent.ACTION_MAIN) requestPhoneVideoAccess()
@@ -225,8 +269,8 @@ class MainActivity : AppCompatActivity() {
                         when (event.type) {
                             MediaPlayer.Event.Opening -> statusText.text = "Opening video…"
                             MediaPlayer.Event.Buffering -> statusText.text = "Buffering…"
-                            MediaPlayer.Event.Playing -> statusText.text = "Playing • VLC engine • Offline • No ads"
-                            MediaPlayer.Event.Paused -> statusText.text = "Paused"
+                            MediaPlayer.Event.Playing -> { statusText.text = "Playing • VLC engine • Offline • No ads"; playPauseButton.text = "Ⅱ" }
+                            MediaPlayer.Event.Paused -> { statusText.text = "Paused"; playPauseButton.text = "▶" }
                             MediaPlayer.Event.EndReached -> statusText.text = "Playback finished"
                             MediaPlayer.Event.EncounteredError -> statusText.text = "VLC could not decode this file. Try another copy or format."
                         }
@@ -277,22 +321,13 @@ class MainActivity : AppCompatActivity() {
         requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
         titleView.visibility = android.view.View.GONE
         videoGrid.visibility = android.view.View.GONE
-        videoLayout.visibility = android.view.View.VISIBLE
-        backButton.visibility = android.view.View.VISIBLE
-        playPauseButton.visibility = android.view.View.VISIBLE
-        playbackControls.visibility = android.view.View.VISIBLE
-        audioButton.visibility = android.view.View.VISIBLE
+        videoContainer.visibility = android.view.View.VISIBLE
         emptyMessage.visibility = android.view.View.GONE
         openVideoButton.visibility = android.view.View.GONE
         storageButton.visibility = android.view.View.GONE
         episodesButton.visibility = android.view.View.GONE
-        audioButton.visibility = android.view.View.VISIBLE
         statusText.visibility = android.view.View.VISIBLE
         rootLayout.setPadding(0, 0, 0, 0)
-        videoLayout.layoutParams = videoLayout.layoutParams.apply {
-            height = 0
-            (this as android.widget.LinearLayout.LayoutParams).weight = 1f
-        }
         WindowCompat.setDecorFitsSystemWindows(window, false)
         WindowInsetsControllerCompat(window, window.decorView).hide(WindowInsetsCompat.Type.systemBars())
     }
@@ -302,22 +337,14 @@ class MainActivity : AppCompatActivity() {
         fullscreen = false
         requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
         titleView.visibility = android.view.View.VISIBLE
-        videoLayout.visibility = android.view.View.GONE
+        videoContainer.visibility = android.view.View.GONE
         videoGrid.visibility = android.view.View.VISIBLE
-        backButton.visibility = android.view.View.GONE
-        playPauseButton.visibility = android.view.View.GONE
-        playbackControls.visibility = android.view.View.GONE
         emptyMessage.visibility = android.view.View.VISIBLE
         openVideoButton.visibility = android.view.View.VISIBLE
         storageButton.visibility = android.view.View.VISIBLE
         episodesButton.visibility = android.view.View.VISIBLE
-        audioButton.visibility = android.view.View.VISIBLE
         statusText.visibility = android.view.View.VISIBLE
         rootLayout.setPadding(16, 16, 16, 16)
-        videoLayout.layoutParams = videoLayout.layoutParams.apply {
-            height = 0
-            (this as android.widget.LinearLayout.LayoutParams).weight = 1f
-        }
         WindowInsetsControllerCompat(window, window.decorView).show(WindowInsetsCompat.Type.systemBars())
         WindowCompat.setDecorFitsSystemWindows(window, true)
     }
@@ -325,6 +352,28 @@ class MainActivity : AppCompatActivity() {
     @Deprecated("Deprecated in Android 13; retained for the app's back navigation")
     override fun onBackPressed() {
         if (fullscreen) exitFullscreen() else super.onBackPressed()
+    }
+
+    private fun formatTime(milliseconds: Long): String {
+        val totalSeconds = (milliseconds / 1000L).coerceAtLeast(0L)
+        val hours = totalSeconds / 3600L
+        val minutes = (totalSeconds % 3600L) / 60L
+        val seconds = totalSeconds % 60L
+        return if (hours > 0L) String.format(Locale.ROOT, "%d:%02d:%02d", hours, minutes, seconds)
+        else String.format(Locale.ROOT, "%02d:%02d", minutes, seconds)
+    }
+
+    private fun showPlaybackSettings() {
+        val speeds = arrayOf("0.5×", "0.75×", "1.0× (Normal)", "1.25×", "1.5×", "2.0×")
+        val rates = floatArrayOf(0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 2.0f)
+        MaterialAlertDialogBuilder(this)
+            .setTitle("Playback settings • Speed")
+            .setItems(speeds) { _, which ->
+                player?.setRate(rates[which])
+                statusText.text = "Playback speed: ${speeds[which]}"
+            }
+            .setNegativeButton("Close", null)
+            .show()
     }
 
     private fun naturalCompare(first: String, second: String): Int {
@@ -385,6 +434,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onStop() {
         super.onStop()
+        uiHandler.removeCallbacks(progressUpdater)
         player?.stop()
         currentVideoFd?.close()
         currentVideoFd = null
