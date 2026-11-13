@@ -50,6 +50,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var videoGrid: GridView
     private lateinit var playPauseButton: MaterialButton
     private lateinit var backButton: MaterialButton
+    private lateinit var playbackControls: android.widget.LinearLayout
     private var videoItems: List<VideoEntry> = emptyList()
     private var fullscreen = false
     private data class VideoEntry(val name: String, val uri: Uri, val id: Long)
@@ -78,6 +79,8 @@ class MainActivity : AppCompatActivity() {
         videoGrid = findViewById(R.id.videoGrid)
         playPauseButton = findViewById(R.id.playPauseButton)
         backButton = findViewById(R.id.backButton)
+        playbackControls = findViewById(R.id.playbackControls)
+        playbackControls.visibility = android.view.View.GONE
         videoLayout.visibility = android.view.View.GONE
         playPauseButton.setOnClickListener { player?.let { if (it.isPlaying) it.pause() else it.play() } }
         backButton.setOnClickListener { player?.stop(); exitFullscreen() }
@@ -216,7 +219,7 @@ class MainActivity : AppCompatActivity() {
             val descriptor = contentResolver.openFileDescriptor(uri, "r")
                 ?: throw IllegalStateException("Android could not open this video")
             currentVideoFd = descriptor
-            val media = Media(vlc, Uri.parse("fd://${descriptor.fd}"))
+            val media = Media(vlc, descriptor.fileDescriptor)
             media.setHWDecoderEnabled(true, false)
             mediaPlayer.media = media
             media.release()
