@@ -30,6 +30,12 @@ import kotlin.math.abs
 import kotlin.math.roundToInt
 import android.view.ViewGroup
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.media3.common.MediaItem
+import androidx.media3.common.Player
+import androidx.media3.common.PlaybackException
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.ui.PlayerView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
@@ -49,6 +55,9 @@ class MainActivity : AppCompatActivity() {
     private var player: MediaPlayer? = null
     private var currentVideoFd: ParcelFileDescriptor? = null
     private lateinit var videoLayout: VLCVideoLayout
+    private lateinit var media3View: PlayerView
+    private var exoPlayer: ExoPlayer? = null
+    private var media3Active = false
     private lateinit var videoContainer: FrameLayout
     private lateinit var playerOverlay: LinearLayout
     private lateinit var topControls: LinearLayout
@@ -134,6 +143,9 @@ class MainActivity : AppCompatActivity() {
         rootLayout = findViewById(R.id.rootLayout)
         titleView = findViewById(R.id.titleView)
         videoLayout = findViewById(R.id.playerView)
+        media3View = findViewById(R.id.media3PlayerView)
+        media3View.useController = false
+        media3View.visibility = View.GONE
         videoContainer = findViewById(R.id.videoContainer)
         playerOverlay = findViewById(R.id.playerOverlay)
         topControls = findViewById(R.id.topControls)
