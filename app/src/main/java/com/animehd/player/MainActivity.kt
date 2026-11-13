@@ -415,6 +415,14 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun playVideo(uri: Uri, name: String) {
+        if (hdEnhancementEnabled) {
+            playVideoWithGpuEnhancement(uri, name)
+            return
+        }
+        media3Active = false
+        media3View.visibility = View.GONE
+        videoLayout.visibility = View.VISIBLE
+        exoPlayer?.pause()
         initializePlayer()
         val vlc = libVLC
         val mediaPlayer = player
@@ -467,6 +475,58 @@ class MainActivity : AppCompatActivity() {
             currentVideoFd?.close()
             currentVideoFd = null
             statusText.text = "Could not open video: ${e.message ?: e.javaClass.simpleName}"
+        }
+    }
+
+    @OptIn(UnstableApi::class)
+    private fun playVideoWithGpuEnhancement(uri: Uri, name: String) {
+        currentVideoUri = uri
+        currentVideoName = name
+        emptyMessage.text = name
+        enterFullscreen()
+        try {
+            initializePlayer()
+            player?.stop()
+            currentVideoFd?.close()
+            currentVideoFd = null
+            val ep = exoPlayer ?: ExoPlayer.Builder(this).build().also { built ->
+                exoPlayer = built
+                media3View.player = built
+                built.addListener(object : Player.Listener {
+                    override fun onPlaybackStateChanged(playbackState: Int) {
+                        if (!media3Active) return
+                        when (playbackState) {
+                            Player.STATE_BUFFERING -> statusText.text = "GPU HD: buffering…"
+                            Player.STATE_READY -> {
+                                statusText.text = "GPU HD sharpening active • OpenGL processing"
+                                scheduleHideControls()
+                            }
+                            Player.STATE_ENDED -> statusText.text = "Playback finished"
+                        }
+                    }
+                    override fun onPlayerError(error: PlaybackException) {
+                        statusText.text = "This file needs VLC compatibility playback. Turn HD off to use VLC."
+                    }
+                })
+            }
+            media3Active = true
+            videoLayout.visibility = View.GONE
+            media3View.visibility = View.VISIBLE
+            ep.setVideoEffects(listOf(GpuSharpnessEffect(0.16f)))
+            ep.setMediaItem(MediaItem.fromUri(uri))
+            ep.prepare()
+            if (pendingSeekMs > 0L) {
+                ep.seekTo(pendingSeekMs)
+                pendingSeekMs = 0L
+            }
+            ep.playWhenReady = true
+            hdButton.text = "HD: ON"
+            statusText.text = "Starting GPU-based HD sharpening…"
+        } catch (e: Exception) {
+            media3Active = false
+            media3View.visibility = View.GONE
+            videoLayout.visibility = View.VISIBLE
+            statusText.text = "GPU enhancement could not start: ${e.message ?: e.javaClass.simpleName}. Turn HD off for VLC playback."
         }
     }
 
