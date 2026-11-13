@@ -377,16 +377,71 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showPlaybackSettings() {
+        val options = arrayOf("Playback speed", "Screen brightness", "Reset screen brightness")
+        MaterialAlertDialogBuilder(this)
+            .setTitle("Playback settings")
+            .setItems(options) { _, which ->
+                when (which) {
+                    0 -> showPlaybackSpeedOptions()
+                    1 -> showScreenBrightnessControl()
+                    2 -> {
+                        val attributes = window.attributes
+                        attributes.screenBrightness = -1f
+                        window.attributes = attributes
+                        statusText.text = "Screen brightness follows device setting"
+                    }
+                }
+            }
+            .setNegativeButton("Close", null)
+            .show()
+    }
+
+    private fun showPlaybackSpeedOptions() {
         val speeds = arrayOf("0.5×", "0.75×", "1.0× (Normal)", "1.25×", "1.5×", "2.0×")
         val rates = floatArrayOf(0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 2.0f)
         MaterialAlertDialogBuilder(this)
-            .setTitle("Playback settings • Speed")
+            .setTitle("Playback speed")
             .setItems(speeds) { _, which ->
                 player?.setRate(rates[which])
                 statusText.text = "Playback speed: ${speeds[which]}"
             }
             .setNegativeButton("Close", null)
             .show()
+    }
+
+    private fun showScreenBrightnessControl() {
+        val seek = SeekBar(this).apply {
+            max = 100
+            val current = window.attributes.screenBrightness
+            progress = if (current < 0f) 50 else (current * 100f).toInt().coerceIn(1, 100)
+        }
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(24, 8, 24, 8)
+            addView(TextView(this@MainActivity).apply {
+                text = "Adjust display brightness while watching"
+                setTextColor(0xFFFFFFFF.toInt())
+            })
+            addView(seek)
+        }
+        val dialog = MaterialAlertDialogBuilder(this)
+            .setTitle("Screen brightness")
+            .setView(content)
+            .setPositiveButton("Done", null)
+            .setNegativeButton("Close", null)
+            .create()
+        seek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(bar: SeekBar?, value: Int, fromUser: Boolean) {
+                if (fromUser) {
+                    val attributes = window.attributes
+                    attributes.screenBrightness = (value.coerceAtLeast(1) / 100f)
+                    window.attributes = attributes
+                }
+            }
+            override fun onStartTrackingTouch(bar: SeekBar?) {}
+            override fun onStopTrackingTouch(bar: SeekBar?) {}
+        })
+        dialog.show()
     }
 
     private fun naturalCompare(first: String, second: String): Int {
