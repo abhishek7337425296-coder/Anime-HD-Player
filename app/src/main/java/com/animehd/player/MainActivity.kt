@@ -17,18 +17,19 @@ import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
-import androidx.media3.common.MediaItem
-import androidx.media3.common.Player
-import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.ui.PlayerView
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import org.videolan.libvlc.LibVLC
+import org.videolan.libvlc.Media
+import org.videolan.libvlc.MediaPlayer
+import org.videolan.libvlc.util.VLCVideoLayout
 import java.math.BigInteger
 import java.util.Locale
 
 class MainActivity : AppCompatActivity() {
-    private var player: ExoPlayer? = null
-    private lateinit var playerView: PlayerView
+    private var libVLC: LibVLC? = null
+    private var player: MediaPlayer? = null
+    private lateinit var videoLayout: VLCVideoLayout
     private lateinit var statusText: TextView
     private lateinit var emptyMessage: TextView
     private lateinit var rootLayout: android.widget.LinearLayout
@@ -55,7 +56,7 @@ class MainActivity : AppCompatActivity() {
         setContentView(R.layout.activity_main)
         rootLayout = findViewById(R.id.rootLayout)
         titleView = findViewById(R.id.titleView)
-        playerView = findViewById(R.id.playerView)
+        videoLayout = findViewById(R.id.playerView)
         statusText = findViewById(R.id.statusText)
         emptyMessage = findViewById(R.id.emptyMessage)
         openVideoButton = findViewById(R.id.openVideoButton)
@@ -143,7 +144,7 @@ class MainActivity : AppCompatActivity() {
             statusText.text = "Found ${videoItems.size} phone video(s) • Episode-number order"
             if (videoItems.isNotEmpty()) showEpisodes()
             else emptyMessage.text = "No indexed videos found. Save Telegram videos to Downloads or Movies first."
-        } catch (e: SecurityException) {
+        } catch (_: SecurityException) {
             statusText.text = "Storage access was limited. Allow video access in Android app settings."
         } catch (e: Exception) {
             statusText.text = "Could not read phone videos: ${e.javaClass.simpleName}"
@@ -152,28 +153,49 @@ class MainActivity : AppCompatActivity() {
 
     private fun initializePlayer() {
         if (player != null) return
-        player = ExoPlayer.Builder(this).build().also { exo ->
-            playerView.player = exo
-            exo.addListener(object : Player.Listener {
-                override fun onPlaybackStateChanged(playbackState: Int) {
-                    if (playbackState == Player.STATE_BUFFERING) statusText.text = "Loading video…"
-                    if (playbackState == Player.STATE_READY) statusText.text = "Playing • Offline • No ads"
-                    if (playbackState == Player.STATE_ENDED) statusText.text = "Playback finished"
+        try {
+            val vlc = LibVLC(this, arrayListOf("--audio-time-stretch", "--no-video-title-show"))
+            libVLC = vlc
+            player = MediaPlayer(vlc).also { mediaPlayer ->
+                mediaPlayer.attachViews(videoLayout, null, false, false)
+                mediaPlayer.setEventListener { event ->
+                    runOnUiThread {
+                        when (event.type) {
+                            MediaPlayer.Event.Opening -> statusText.text = "Opening video…"
+                            MediaPlayer.Event.Buffering -> statusText.text = "Buffering…"
+                            MediaPlayer.Event.Playing -> statusText.text = "Playing • VLC engine • Offline • No ads"
+                            MediaPlayer.Event.Paused -> statusText.text = "Paused"
+                            MediaPlayer.Event.EndReached -> statusText.text = "Playback finished"
+                            MediaPlayer.Event.EncounteredError -> statusText.text = "VLC could not decode this file. Try another copy or format."
+                        }
+                    }
                 }
-                override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
-                    statusText.text = "Playback error: ${error.errorCodeName}. Send me a screenshot of this message."
-                }
-            })
+            }
+        } catch (e: Exception) {
+            statusText.text = "Could not start VLC engine: ${e.javaClass.simpleName}"
         }
     }
 
     private fun playVideo(uri: Uri, name: String) {
         initializePlayer()
+        val vlc = libVLC
+        val mediaPlayer = player
+        if (vlc == null || mediaPlayer == null) {
+            statusText.text = "Player engine did not start. Please reopen the app."
+            return
+        }
         emptyMessage.text = name
         enterFullscreen()
-        player?.setMediaItem(MediaItem.fromUri(uri))
-        player?.prepare()
-        player?.playWhenReady = true
+        try {
+            mediaPlayer.stop()
+            val media = Media(vlc, uri)
+            media.setHWDecoderEnabled(true, false)
+            mediaPlayer.media = media
+            media.release()
+            mediaPlayer.play()
+        } catch (e: Exception) {
+            statusText.text = "Could not open this Telegram file: ${e.javaClass.simpleName}"
+        }
     }
 
     private fun enterFullscreen() {
@@ -188,7 +210,7 @@ class MainActivity : AppCompatActivity() {
         audioButton.visibility = android.view.View.GONE
         statusText.visibility = android.view.View.GONE
         rootLayout.setPadding(0, 0, 0, 0)
-        playerView.layoutParams = playerView.layoutParams.apply {
+        videoLayout.layoutParams = videoLayout.layoutParams.apply {
             height = 0
             (this as android.widget.LinearLayout.LayoutParams).weight = 1f
         }
@@ -208,7 +230,7 @@ class MainActivity : AppCompatActivity() {
         audioButton.visibility = android.view.View.VISIBLE
         statusText.visibility = android.view.View.VISIBLE
         rootLayout.setPadding(16, 16, 16, 16)
-        playerView.layoutParams = playerView.layoutParams.apply {
+        videoLayout.layoutParams = videoLayout.layoutParams.apply {
             height = 0
             (this as android.widget.LinearLayout.LayoutParams).weight = 1f
         }
@@ -246,48 +268,44 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showTrackOptions() {
-        val exo = player
-        if (exo == null || exo.currentMediaItem == null) {
+        val mediaPlayer = player
+        if (mediaPlayer == null || mediaPlayer.media == null) {
             statusText.text = "Open a video first to choose audio or subtitles."
             return
         }
-        val groups = exo.currentTracks.groups
         val options = mutableListOf<String>()
         val actions = mutableListOf<() -> Unit>()
-        for (i in 0 until groups.size) {
-            val group = groups[i]
-            val typeName = when (group.type) {
-                androidx.media3.common.C.TRACK_TYPE_AUDIO -> "Audio"
-                androidx.media3.common.C.TRACK_TYPE_TEXT -> "Subtitle"
-                else -> continue
-            }
-            for (j in 0 until group.length) {
-                val format = group.getTrackFormat(j)
-                val language = format.language ?: "Unknown language"
-                val label = format.label ?: language
-                options.add("$typeName: $label ($language)")
-                actions.add {
-                    val override = androidx.media3.common.TrackSelectionOverride(group.mediaTrackGroup, listOf(j))
-                    exo.trackSelectionParameters = exo.trackSelectionParameters.buildUpon().addOverride(override).build()
-                }
-            }
+        mediaPlayer.audioTracks?.forEach { track ->
+            options.add("Audio: ${track.name}")
+            actions.add { mediaPlayer.setAudioTrack(track.id) }
         }
-        if (options.isEmpty()) { statusText.text = "No selectable audio or subtitle tracks found."; return }
+        mediaPlayer.spuTracks?.forEach { track ->
+            options.add("Subtitle: ${track.name}")
+            actions.add { mediaPlayer.setSpuTrack(track.id) }
+        }
         options.add("Disable subtitles")
-        actions.add {
-            exo.trackSelectionParameters = exo.trackSelectionParameters.buildUpon()
-                .setTrackTypeDisabled(androidx.media3.common.C.TRACK_TYPE_TEXT, true).build()
+        actions.add { mediaPlayer.setSpuTrack(-1) }
+        if (options.isEmpty()) {
+            statusText.text = "No selectable audio or subtitle tracks found."
+            return
         }
         MaterialAlertDialogBuilder(this).setTitle("Audio and subtitles")
             .setItems(options.toTypedArray()) { _, which -> actions[which]() }
             .setNegativeButton("Close", null).show()
     }
 
-    override fun onStart() { super.onStart(); initializePlayer() }
+    override fun onStart() {
+        super.onStart()
+        initializePlayer()
+    }
+
     override fun onStop() {
         super.onStop()
-        playerView.player = null
+        player?.stop()
+        player?.detachViews()
         player?.release()
         player = null
+        libVLC?.release()
+        libVLC = null
     }
 }
