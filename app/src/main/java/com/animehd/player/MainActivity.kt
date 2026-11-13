@@ -22,6 +22,7 @@ import android.widget.SeekBar
 import android.os.Handler
 import android.os.Looper
 import android.view.Gravity
+import android.view.GestureDetector
 import android.view.MotionEvent
 import android.view.View
 import android.graphics.drawable.GradientDrawable
@@ -86,8 +87,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var hdButton: MaterialButton
     private lateinit var videoGrid: GridView
     private lateinit var playPauseButton: MaterialButton
-    private lateinit var seekBackButton: MaterialButton
-    private lateinit var seekForwardButton: MaterialButton
+    private lateinit var gestureDetector: GestureDetector
+    private var seekIntervalMs = 10_000L
     private lateinit var backButton: MaterialButton
     private val uiHandler = Handler(Looper.getMainLooper())
     private var userSeeking = false
@@ -181,8 +182,36 @@ class MainActivity : AppCompatActivity() {
         hdButton = findViewById(R.id.hdButton)
         videoGrid = findViewById(R.id.videoGrid)
         playPauseButton = findViewById(R.id.playPauseButton)
-        seekBackButton = findViewById(R.id.seekBackButton)
-        seekForwardButton = findViewById(R.id.seekForwardButton)
+        gestureDetector = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
+            override fun onDown(e: MotionEvent): Boolean = true
+            override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
+                if (controlsVisible) {
+                    setControlsVisible(false)
+                    uiHandler.removeCallbacks(hideControlsRunnable)
+                } else revealControls()
+                return true
+            }
+            override fun onDoubleTap(e: MotionEvent): Boolean {
+                val x = e.x
+                val width = playerOverlay.width.toFloat().coerceAtLeast(1f)
+                when {
+                    x < width * 0.42f -> {
+                        seekBy(-seekIntervalMs)
+                        showGestureHud(0, "−${seekIntervalMs / 1000}s", 1, 1)
+                    }
+                    x > width * 0.58f -> {
+                        seekBy(seekIntervalMs)
+                        showGestureHud(1, "+${seekIntervalMs / 1000}s", 1, 1)
+                    }
+                    else -> {
+                        if (media3Active) exoPlayer?.let { if (it.isPlaying) it.pause() else it.play() }
+                        else player?.let { if (it.isPlaying) it.pause() else it.play() }
+                    }
+                }
+                revealControls()
+                return true
+            }
+        })
         backButton = findViewById(R.id.backButton)
         setupGestureHud()
         playerOverlay.setOnTouchListener { _, event -> handleOverlayTouch(event) }
@@ -195,8 +224,6 @@ class MainActivity : AppCompatActivity() {
             }
             revealControls()
         }
-        seekBackButton.setOnClickListener { seekBy(-10_000L); revealControls() }
-        seekForwardButton.setOnClickListener { seekBy(10_000L); revealControls() }
         settingsButton.setOnClickListener { showPlaybackSettings(); revealControls() }
         seekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(bar: SeekBar?, progress: Int, fromUser: Boolean) {
@@ -651,6 +678,7 @@ class MainActivity : AppCompatActivity() {
     private fun handleOverlayTouch(event: MotionEvent): Boolean {
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
+                gestureDetector.onTouchEvent(event)
                 gestureStartY = event.y
                 gestureMoved = false
                 gestureSide = if (event.x < playerOverlay.width / 2f) 0 else 1
@@ -661,6 +689,7 @@ class MainActivity : AppCompatActivity() {
                 return true
             }
             MotionEvent.ACTION_MOVE -> {
+                gestureDetector.onTouchEvent(event)
                 val deltaY = gestureStartY - event.y
                 if (!gestureMoved && abs(deltaY) > dp(8)) gestureMoved = true
                 if (gestureMoved) {
@@ -683,20 +712,14 @@ class MainActivity : AppCompatActivity() {
                 return true
             }
             MotionEvent.ACTION_UP -> {
+                gestureDetector.onTouchEvent(event)
                 if (gestureMoved) {
                     uiHandler.removeCallbacks(hideControlsRunnable)
                     if (player?.isPlaying == true) scheduleHideControls()
-                } else {
-                    if (controlsVisible) {
-                        setControlsVisible(false)
-                        uiHandler.removeCallbacks(hideControlsRunnable)
-                    } else {
-                        revealControls()
-                    }
                 }
                 return true
             }
-            MotionEvent.ACTION_CANCEL -> return true
+            MotionEvent.ACTION_CANCEL -> { gestureDetector.onTouchEvent(event); return true }
         }
         return true
     }
@@ -724,7 +747,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showPlaybackSettings() {
-        val options = arrayOf("Playback speed", "Screen brightness", "Reset screen brightness")
+        val options = arrayOf("Playback speed", "Screen brightness", "Reset screen brightness", "Double-tap seek interval")
         MaterialAlertDialogBuilder(this)
             .setTitle("Playback settings")
             .setItems(options) { _, which ->
@@ -737,7 +760,23 @@ class MainActivity : AppCompatActivity() {
                         window.attributes = attributes
                         statusText.text = "Screen brightness follows device setting"
                     }
+                    3 -> showSeekIntervalOptions()
                 }
+            }
+            .setNegativeButton("Close", null)
+            .show()
+    }
+
+    private fun showSeekIntervalOptions() {
+        val labels = arrayOf("5 seconds", "10 seconds", "15 seconds", "20 seconds", "30 seconds")
+        val values = longArrayOf(5_000L, 10_000L, 15_000L, 20_000L, 30_000L)
+        val selected = values.indexOf(seekIntervalMs).coerceAtLeast(0)
+        MaterialAlertDialogBuilder(this)
+            .setTitle("Double-tap seek interval")
+            .setSingleChoiceItems(labels, selected) { dialog, which ->
+                seekIntervalMs = values[which]
+                dialog.dismiss()
+                statusText.text = "Double-tap skips ${labels[which]}"
             }
             .setNegativeButton("Close", null)
             .show()
@@ -815,6 +854,17 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
+    private fun friendlyTrackName(raw: String?, fallback: String): String {
+        val value = raw.orEmpty()
+        val known = listOf("Telugu", "Tamil", "Hindi", "English", "Japanese", "Korean", "Chinese", "Spanish", "French", "German", "Arabic", "Portuguese", "Russian")
+        known.firstOrNull { value.contains(it, ignoreCase = true) }?.let { return it }
+        val cleaned = value.substringBefore(",").substringAfterLast(" - ")
+            .replace(Regex("\\[[^]]*]"), "")
+            .replace(Regex("(?i)handler_name=.*|comment=.*|encoder=.*"), "")
+            .replace('_', ' ').trim().trim('-', '•', ' ')
+        return cleaned.takeIf { it.isNotBlank() && it.length < 48 } ?: fallback
+    }
+
     private fun showTrackOptions() {
         if (media3Active) {
             val ep = exoPlayer ?: return
@@ -827,7 +877,7 @@ class MainActivity : AppCompatActivity() {
                     for (index in 0 until group.length) {
                         val format = group.getTrackFormat(index)
                         val kind = if (isAudio) "Audio" else "Subtitle"
-                        val label = format.label ?: format.language ?: "Track ${index + 1}"
+                        val label = friendlyTrackName(format.language ?: format.label, "Track ${index + 1}")
                         options.add("$kind • $label")
                         actions.add {
                             val override = TrackSelectionOverride(group.mediaTrackGroup, listOf(index))
@@ -854,7 +904,7 @@ class MainActivity : AppCompatActivity() {
                 return
             }
             MaterialAlertDialogBuilder(this)
-                .setTitle("Audio tracks and subtitles")
+                .setTitle("Audio & subtitles")
                 .setItems(options.toTypedArray()) { _, which -> actions[which]() }
                 .setNegativeButton("Close", null)
                 .show()
@@ -874,11 +924,11 @@ class MainActivity : AppCompatActivity() {
         val options = mutableListOf<String>()
         val actions = mutableListOf<() -> Unit>()
         audioTracks.forEach { track ->
-            options.add("Audio • ${track.name}")
+            options.add("Audio   •   ${friendlyTrackName(track.name, "Audio track")}")
             actions.add { mediaPlayer.setAudioTrack(track.id) }
         }
         subtitleTracks.forEach { track ->
-            options.add("Subtitle • ${track.name}")
+            options.add("Subtitles   •   ${friendlyTrackName(track.name, "Subtitle track")}")
             actions.add { mediaPlayer.setSpuTrack(track.id) }
         }
         if (subtitleTracks.isNotEmpty()) {
