@@ -108,6 +108,8 @@ class MainActivity : AppCompatActivity() {
     private var gestureMoved = false
     private var gestureStartBrightness = 50
     private var gestureStartVolume = 0
+    // VLC software gain: 100% is normal device output; up to 200% amplifies in the player.
+    private var softwareVolumePercent = 100
     private val hideControlsRunnable = Runnable {
         if (fullscreen && player?.isPlaying == true) setControlsVisible(false)
     }
@@ -518,9 +520,8 @@ class MainActivity : AppCompatActivity() {
                 gestureMoved = false
                 gestureSide = if (event.x < playerOverlay.width / 2f) 0 else 1
                 gestureStartBrightness = currentBrightnessPercent()
-                val maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
-                val currentVolume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
-                gestureStartVolume = (currentVolume * 200f / maxVolume).roundToInt()
+                // Read the player's software gain, not the Android device volume.
+                gestureStartVolume = softwareVolumePercent
                 gestureStartValue = if (gestureSide == 0) gestureStartBrightness else gestureStartVolume
                 return true
             }
@@ -537,9 +538,11 @@ class MainActivity : AppCompatActivity() {
                         showGestureHud(0, "Brightness  $level%", level, 100)
                     } else {
                         val level = (gestureStartVolume + fraction * 200f).roundToInt().coerceIn(0, 200)
-                        val maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
-                        audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, (level * maxVolume / 200f).roundToInt().coerceIn(0, maxVolume), 0)
-                        showGestureHud(1, "Volume  $level/200", level, 200)
+                        softwareVolumePercent = level
+                        // LibVLC supports software player volume up to 200%, beyond the device's
+                        // normal 100% output level. Android's hardware volume remains unchanged.
+                        player?.setVolume(level)
+                        showGestureHud(1, "Player volume  $level%", level, 200)
                     }
                 }
                 return true
