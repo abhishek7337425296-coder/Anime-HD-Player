@@ -417,10 +417,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun playVideo(uri: Uri, name: String) {
-        if (hdEnhancementEnabled) {
-            playVideoWithGpuEnhancement(uri, name)
-            return
-        }
+        // Keep HD playback on the same LibVLC decoder path as normal playback.
+        // The Media3/OpenGL path caused a black video and lost audio on some devices
+        // (including the reported SM-T220). VLC's built-in sharpen filter is applied
+        // below when HD is enabled, avoiding an engine switch during playback.
         media3Active = false
         media3View.visibility = View.GONE
         videoLayout.visibility = View.VISIBLE
