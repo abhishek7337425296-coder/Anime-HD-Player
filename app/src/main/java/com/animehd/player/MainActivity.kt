@@ -99,8 +99,8 @@ class MainActivity : AppCompatActivity() {
     private var videoItems: List<VideoEntry> = emptyList()
     private var fullscreen = false
     private var enhancementEnabled = false
-    // Display scaling only: this does not change the video's encoded resolution.
-    private var hdAutoFitEnabled = true
+    // Real-time conventional edge sharpening; this is not AI super-resolution.
+    private var hdEnhancementEnabled = false
     private var currentVideoUri: Uri? = null
     private var currentVideoName: String = "Video"
     private var pendingSeekMs: Long = 0L
@@ -185,19 +185,18 @@ class MainActivity : AppCompatActivity() {
         episodesButton.setOnClickListener { showEpisodes() }
         audioButton.setOnClickListener { showTrackOptions(); revealControls() }
         hdButton.setOnClickListener {
-            val mp = player
-            if (currentVideoUri == null || mp == null) {
-                statusText.text = "Open a video before changing HD display mode."
+            val uri = currentVideoUri
+            if (uri == null || player == null) {
+                statusText.text = "Open a video before enabling HD Enhance."
             } else {
-                hdAutoFitEnabled = !hdAutoFitEnabled
-                // LibVLC scale 0 means fit the video to the available view;
-                // 1 means native pixel size. Neither mode creates extra detail.
-                mp.setScale(if (hdAutoFitEnabled) 0f else 1f)
-                hdButton.text = if (hdAutoFitEnabled) "HD: AUTO" else "HD: 1:1"
-                statusText.text = if (hdAutoFitEnabled)
-                    "Auto fit enabled • original video quality • no AI upscaling"
+                hdEnhancementEnabled = !hdEnhancementEnabled
+                pendingSeekMs = player?.time?.coerceAtLeast(0L) ?: 0L
+                hdButton.text = if (hdEnhancementEnabled) "HD: ON" else "HD: OFF"
+                statusText.text = if (hdEnhancementEnabled)
+                    "Applying real-time edge sharpening…"
                 else
-                    "Original pixel size • source resolution unchanged"
+                    "HD sharpening turned off"
+                playVideo(uri, currentVideoName)
             }
             revealControls()
         }
@@ -352,9 +351,15 @@ class MainActivity : AppCompatActivity() {
                             MediaPlayer.Event.Opening -> statusText.text = "Opening video…"
                             MediaPlayer.Event.Buffering -> statusText.text = "Buffering…"
                             MediaPlayer.Event.Playing -> {
-                                mediaPlayer.setScale(if (hdAutoFitEnabled) 0f else 1f)
-                                hdButton.text = if (hdAutoFitEnabled) "HD: AUTO" else "HD: 1:1"
-                                statusText.text = if (enhancementEnabled) "Color enhancement active • software decoding" else "Playing • VLC engine • Offline • No ads"
+                                // Always fit the full video frame; HD Enhance must never change its size.
+                                mediaPlayer.setScale(0f)
+                                hdButton.text = if (hdEnhancementEnabled) "HD: ON" else "HD: OFF"
+                                statusText.text = when {
+                                    hdEnhancementEnabled && enhancementEnabled -> "Sharpening + color enhancement active • software decoding"
+                                    hdEnhancementEnabled -> "Edge sharpening active • source resolution unchanged"
+                                    enhancementEnabled -> "Color enhancement active • software decoding"
+                                    else -> "Playing • VLC engine • Offline • No ads"
+                                }
                                 scheduleHideControls()
                                 playPauseButton.text = "Ⅱ"
                                 if (pendingSeekMs > 0L) {
@@ -399,16 +404,27 @@ class MainActivity : AppCompatActivity() {
                 ?: throw IllegalStateException("Android could not open this video")
             currentVideoFd = descriptor
             val media = Media(vlc, descriptor.fileDescriptor)
-            // Use software decoding while the adjust filter is enabled so the filter is not bypassed by hardware video output.
-            media.setHWDecoderEnabled(!enhancementEnabled, false)
+            // VLC's video filters require software decoding on this playback path.
+            // Keep the frame fitted to the view; sharpening is independent of display scale.
+            val filters = mutableListOf<String>()
+            if (enhancementEnabled) filters.add("adjust")
+            if (hdEnhancementEnabled) filters.add("sharpen")
+            val processingEnabled = filters.isNotEmpty()
+            media.setHWDecoderEnabled(!processingEnabled, false)
+            if (processingEnabled) {
+                media.addOption(":video-filter=${filters.joinToString(",")}")
+            }
             if (enhancementEnabled) {
-                // LibVLC adjust filter performs playback-time image processing.
-                // This is conventional enhancement, not AI upscaling.
-                media.addOption(":video-filter=adjust")
+                // Preserve the existing Auto Enhance settings unchanged.
                 media.addOption(":contrast=1.40")
                 media.addOption(":brightness=1.08")
                 media.addOption(":saturation=1.35")
                 media.addOption(":gamma=1.0")
+            }
+            if (hdEnhancementEnabled) {
+                // Moderate sharpening can make edges look crisper, but cannot restore
+                // detail that was never present in a low-resolution source.
+                media.addOption(":sharpen-sigma=0.18")
             }
             mediaPlayer.media = media
             media.release()
