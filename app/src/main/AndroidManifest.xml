@@ -6,6 +6,7 @@
     <application
         android:allowBackup="false"
         android:label="Anime HD Player"
+        android:icon="@drawable/ic_uchiha_clan"
         android:supportsRtl="true"
         android:theme="@style/AppTheme">
         <activity
