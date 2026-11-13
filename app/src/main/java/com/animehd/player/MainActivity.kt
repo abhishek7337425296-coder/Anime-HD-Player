@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.ContentUris
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.media.AudioManager
 import android.content.pm.ActivityInfo
 import android.net.Uri
 import android.os.Build
@@ -21,6 +22,12 @@ import android.widget.SeekBar
 import android.os.Handler
 import android.os.Looper
 import android.view.Gravity
+import android.view.MotionEvent
+import android.view.View
+import android.graphics.drawable.GradientDrawable
+import android.widget.ProgressBar
+import kotlin.math.abs
+import kotlin.math.roundToInt
 import android.view.ViewGroup
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
@@ -43,6 +50,15 @@ class MainActivity : AppCompatActivity() {
     private var currentVideoFd: ParcelFileDescriptor? = null
     private lateinit var videoLayout: VLCVideoLayout
     private lateinit var videoContainer: FrameLayout
+    private lateinit var playerOverlay: LinearLayout
+    private lateinit var topControls: LinearLayout
+    private lateinit var centerControls: LinearLayout
+    private lateinit var timelineControls: LinearLayout
+    private lateinit var bottomControls: LinearLayout
+    private lateinit var gestureHud: LinearLayout
+    private lateinit var gestureHudLabel: TextView
+    private lateinit var gestureHudBar: ProgressBar
+    private lateinit var audioManager: AudioManager
     private lateinit var seekBar: SeekBar
     private lateinit var currentTimeText: TextView
     private lateinit var durationText: TextView
@@ -85,6 +101,17 @@ class MainActivity : AppCompatActivity() {
     private var currentVideoUri: Uri? = null
     private var currentVideoName: String = "Video"
     private var pendingSeekMs: Long = 0L
+    private var controlsVisible = true
+    private var gestureStartY = 0f
+    private var gestureStartValue = 0
+    private var gestureSide = 0
+    private var gestureMoved = false
+    private var gestureStartBrightness = 50
+    private var gestureStartVolume = 0
+    private val hideControlsRunnable = Runnable {
+        if (fullscreen && player?.isPlaying == true) setControlsVisible(false)
+    }
+    private val hideHudRunnable = Runnable { gestureHud.visibility = View.GONE }
     private data class VideoEntry(val name: String, val uri: Uri, val id: Long)
 
     private val openVideo = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -103,6 +130,12 @@ class MainActivity : AppCompatActivity() {
         titleView = findViewById(R.id.titleView)
         videoLayout = findViewById(R.id.playerView)
         videoContainer = findViewById(R.id.videoContainer)
+        playerOverlay = findViewById(R.id.playerOverlay)
+        topControls = findViewById(R.id.topControls)
+        centerControls = findViewById(R.id.centerControls)
+        timelineControls = findViewById(R.id.timelineControls)
+        bottomControls = findViewById(R.id.bottomControls)
+        audioManager = getSystemService(AUDIO_SERVICE) as AudioManager
         seekBar = findViewById(R.id.seekBar)
         currentTimeText = findViewById(R.id.currentTimeText)
         durationText = findViewById(R.id.durationText)
@@ -119,11 +152,13 @@ class MainActivity : AppCompatActivity() {
         seekBackButton = findViewById(R.id.seekBackButton)
         seekForwardButton = findViewById(R.id.seekForwardButton)
         backButton = findViewById(R.id.backButton)
-        videoContainer.visibility = android.view.View.GONE
-        playPauseButton.setOnClickListener { player?.let { if (it.isPlaying) { it.pause(); playPauseButton.text = "▶" } else { it.play(); playPauseButton.text = "Ⅱ" } } }
-        seekBackButton.setOnClickListener { seekBy(-10_000L) }
-        seekForwardButton.setOnClickListener { seekBy(10_000L) }
-        settingsButton.setOnClickListener { showPlaybackSettings() }
+        setupGestureHud()
+        playerOverlay.setOnTouchListener { _, event -> handleOverlayTouch(event) }
+        videoContainer.visibility = View.GONE
+        playPauseButton.setOnClickListener { player?.let { if (it.isPlaying) { it.pause(); playPauseButton.text = "▶" } else { it.play(); playPauseButton.text = "Ⅱ" } }; revealControls() }
+        seekBackButton.setOnClickListener { seekBy(-10_000L); revealControls() }
+        seekForwardButton.setOnClickListener { seekBy(10_000L); revealControls() }
+        settingsButton.setOnClickListener { showPlaybackSettings(); revealControls() }
         seekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(bar: SeekBar?, progress: Int, fromUser: Boolean) {
                 if (fromUser) {
@@ -131,7 +166,7 @@ class MainActivity : AppCompatActivity() {
                     if (length > 0L) currentTimeText.text = formatTime(length * progress / 1000L)
                 }
             }
-            override fun onStartTrackingTouch(bar: SeekBar?) { userSeeking = true }
+            override fun onStartTrackingTouch(bar: SeekBar?) { userSeeking = true; revealControls() }
             override fun onStopTrackingTouch(bar: SeekBar?) {
                 val length = player?.length ?: 0L
                 if (length > 0L) player?.setTime(length * (bar?.progress ?: 0) / 1000L)
@@ -142,7 +177,7 @@ class MainActivity : AppCompatActivity() {
         openVideoButton.setOnClickListener { openVideo.launch(arrayOf("video/*")) }
         storageButton.setOnClickListener { requestPhoneVideoAccess() }
         episodesButton.setOnClickListener { showEpisodes() }
-        audioButton.setOnClickListener { showTrackOptions() }
+        audioButton.setOnClickListener { showTrackOptions(); revealControls() }
         enhanceButton.setOnClickListener {
             val uri = currentVideoUri
             if (uri == null) {
@@ -294,7 +329,8 @@ class MainActivity : AppCompatActivity() {
                             MediaPlayer.Event.Opening -> statusText.text = "Opening video…"
                             MediaPlayer.Event.Buffering -> statusText.text = "Buffering…"
                             MediaPlayer.Event.Playing -> {
-                                statusText.text = if (enhancementEnabled) "Auto Enhance active • VLC engine" else "Playing • VLC engine • Offline • No ads"
+                                statusText.text = if (enhancementEnabled) "Color enhancement active • software decoding" else "Playing • VLC engine • Offline • No ads"
+                                scheduleHideControls()
                                 playPauseButton.text = "Ⅱ"
                                 if (pendingSeekMs > 0L) {
                                     val restoreAt = pendingSeekMs
@@ -338,14 +374,15 @@ class MainActivity : AppCompatActivity() {
                 ?: throw IllegalStateException("Android could not open this video")
             currentVideoFd = descriptor
             val media = Media(vlc, descriptor.fileDescriptor)
-            media.setHWDecoderEnabled(true, false)
+            // Use software decoding while the adjust filter is enabled so the filter is not bypassed by hardware video output.
+            media.setHWDecoderEnabled(!enhancementEnabled, false)
             if (enhancementEnabled) {
                 // LibVLC adjust filter performs playback-time image processing.
                 // This is conventional enhancement, not AI upscaling.
                 media.addOption(":video-filter=adjust")
-                media.addOption(":contrast=1.12")
-                media.addOption(":brightness=1.03")
-                media.addOption(":saturation=1.12")
+                media.addOption(":contrast=1.40")
+                media.addOption(":brightness=1.08")
+                media.addOption(":saturation=1.35")
                 media.addOption(":gamma=1.0")
             }
             mediaPlayer.media = media
@@ -369,8 +406,10 @@ class MainActivity : AppCompatActivity() {
         openVideoButton.visibility = android.view.View.GONE
         storageButton.visibility = android.view.View.GONE
         episodesButton.visibility = android.view.View.GONE
-        statusText.visibility = android.view.View.VISIBLE
+        statusText.visibility = View.GONE
         rootLayout.setPadding(0, 0, 0, 0)
+        setControlsVisible(true)
+        scheduleHideControls()
         WindowCompat.setDecorFitsSystemWindows(window, false)
         WindowInsetsControllerCompat(window, window.decorView).hide(WindowInsetsCompat.Type.systemBars())
     }
@@ -378,6 +417,9 @@ class MainActivity : AppCompatActivity() {
     private fun exitFullscreen() {
         if (!fullscreen) return
         fullscreen = false
+        uiHandler.removeCallbacks(hideControlsRunnable)
+        uiHandler.removeCallbacks(hideHudRunnable)
+        gestureHud.visibility = View.GONE
         requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
         titleView.visibility = android.view.View.VISIBLE
         videoContainer.visibility = android.view.View.GONE
@@ -386,7 +428,7 @@ class MainActivity : AppCompatActivity() {
         openVideoButton.visibility = android.view.View.VISIBLE
         storageButton.visibility = android.view.View.VISIBLE
         episodesButton.visibility = android.view.View.VISIBLE
-        statusText.visibility = android.view.View.VISIBLE
+        statusText.visibility = View.VISIBLE
         rootLayout.setPadding(16, 16, 16, 16)
         WindowInsetsControllerCompat(window, window.decorView).show(WindowInsetsCompat.Type.systemBars())
         WindowCompat.setDecorFitsSystemWindows(window, true)
@@ -395,6 +437,130 @@ class MainActivity : AppCompatActivity() {
     @Deprecated("Deprecated in Android 13; retained for the app's back navigation")
     override fun onBackPressed() {
         if (fullscreen) exitFullscreen() else super.onBackPressed()
+    }
+
+
+    private fun dp(value: Int): Int = (value * resources.displayMetrics.density).roundToInt()
+
+    private fun setupGestureHud() {
+        gestureHudLabel = TextView(this).apply {
+            setTextColor(0xFFFFFFFF.toInt())
+            textSize = 13f
+            gravity = Gravity.CENTER
+        }
+        gestureHudBar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+            max = 200
+            progress = 100
+            progressTintList = android.content.res.ColorStateList.valueOf(0xFFFFFFFF.toInt())
+            progressBackgroundTintList = android.content.res.ColorStateList.valueOf(0x66888888)
+        }
+        gestureHud = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            setPadding(dp(12), dp(8), dp(12), dp(8))
+            background = GradientDrawable().apply {
+                setColor(0xCC202027.toInt())
+                cornerRadius = dp(12).toFloat()
+            }
+            visibility = View.GONE
+            addView(gestureHudLabel, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(24)))
+            addView(gestureHudBar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(8)))
+        }
+        videoContainer.addView(gestureHud, FrameLayout.LayoutParams(dp(148), dp(58), Gravity.CENTER))
+    }
+
+    private fun setControlsVisible(visible: Boolean) {
+        controlsVisible = visible
+        val visibility = if (visible) View.VISIBLE else View.GONE
+        topControls.visibility = visibility
+        centerControls.visibility = visibility
+        timelineControls.visibility = visibility
+        bottomControls.visibility = visibility
+        if (visible) statusText.visibility = View.GONE
+    }
+
+    private fun scheduleHideControls() {
+        uiHandler.removeCallbacks(hideControlsRunnable)
+        if (fullscreen && player?.isPlaying == true) {
+            uiHandler.postDelayed(hideControlsRunnable, 3000L)
+        }
+    }
+
+    private fun revealControls() {
+        if (!fullscreen) return
+        setControlsVisible(true)
+        scheduleHideControls()
+    }
+
+    private fun showGestureHud(side: Int, label: String, value: Int, maximum: Int) {
+        gestureHudLabel.text = label
+        gestureHudBar.max = maximum
+        gestureHudBar.progress = value.coerceIn(0, maximum)
+        val params = gestureHud.layoutParams as FrameLayout.LayoutParams
+        params.gravity = if (side == 0) Gravity.CENTER_VERTICAL or Gravity.START else Gravity.CENTER_VERTICAL or Gravity.END
+        params.marginStart = if (side == 0) dp(22) else 0
+        params.marginEnd = if (side == 1) dp(22) else 0
+        gestureHud.layoutParams = params
+        gestureHud.visibility = View.VISIBLE
+        uiHandler.removeCallbacks(hideHudRunnable)
+        uiHandler.postDelayed(hideHudRunnable, 1200L)
+    }
+
+    private fun currentBrightnessPercent(): Int {
+        val value = window.attributes.screenBrightness
+        return if (value >= 0f) (value * 100f).roundToInt().coerceIn(1, 100) else 50
+    }
+
+    private fun handleOverlayTouch(event: MotionEvent): Boolean {
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                gestureStartY = event.y
+                gestureMoved = false
+                gestureSide = if (event.x < playerOverlay.width / 2f) 0 else 1
+                gestureStartBrightness = currentBrightnessPercent()
+                val maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
+                val currentVolume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
+                gestureStartVolume = (currentVolume * 200f / maxVolume).roundToInt()
+                gestureStartValue = if (gestureSide == 0) gestureStartBrightness else gestureStartVolume
+                return true
+            }
+            MotionEvent.ACTION_MOVE -> {
+                val deltaY = gestureStartY - event.y
+                if (!gestureMoved && abs(deltaY) > dp(8)) gestureMoved = true
+                if (gestureMoved) {
+                    val fraction = (deltaY / playerOverlay.height.coerceAtLeast(1).toFloat())
+                    if (gestureSide == 0) {
+                        val level = (gestureStartBrightness + fraction * 100f).roundToInt().coerceIn(1, 100)
+                        val attributes = window.attributes
+                        attributes.screenBrightness = level / 100f
+                        window.attributes = attributes
+                        showGestureHud(0, "Brightness  $level%", level, 100)
+                    } else {
+                        val level = (gestureStartVolume + fraction * 200f).roundToInt().coerceIn(0, 200)
+                        val maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
+                        audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, (level * maxVolume / 200f).roundToInt().coerceIn(0, maxVolume), 0)
+                        showGestureHud(1, "Volume  $level/200", level, 200)
+                    }
+                }
+                return true
+            }
+            MotionEvent.ACTION_UP -> {
+                if (gestureMoved) {
+                    uiHandler.removeCallbacks(hideControlsRunnable)
+                    if (player?.isPlaying == true) scheduleHideControls()
+                } else {
+                    if (controlsVisible) {
+                        setControlsVisible(false)
+                        uiHandler.removeCallbacks(hideControlsRunnable)
+                    } else {
+                        revealControls()
+                    }
+                }
+                return true
+            }
+            MotionEvent.ACTION_CANCEL -> return true
+        }
+        return true
     }
 
     private fun seekBy(offsetMs: Long) {
@@ -546,6 +712,8 @@ class MainActivity : AppCompatActivity() {
     override fun onStop() {
         super.onStop()
         uiHandler.removeCallbacks(progressUpdater)
+        uiHandler.removeCallbacks(hideControlsRunnable)
+        uiHandler.removeCallbacks(hideHudRunnable)
         player?.stop()
         currentVideoFd?.close()
         currentVideoFd = null
