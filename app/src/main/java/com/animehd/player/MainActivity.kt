@@ -280,11 +280,13 @@ class MainActivity : AppCompatActivity() {
         videoLayout.visibility = android.view.View.VISIBLE
         backButton.visibility = android.view.View.VISIBLE
         playPauseButton.visibility = android.view.View.VISIBLE
+        playbackControls.visibility = android.view.View.VISIBLE
+        audioButton.visibility = android.view.View.VISIBLE
         emptyMessage.visibility = android.view.View.GONE
         openVideoButton.visibility = android.view.View.GONE
         storageButton.visibility = android.view.View.GONE
         episodesButton.visibility = android.view.View.GONE
-        audioButton.visibility = android.view.View.GONE
+        audioButton.visibility = android.view.View.VISIBLE
         statusText.visibility = android.view.View.VISIBLE
         rootLayout.setPadding(0, 0, 0, 0)
         videoLayout.layoutParams = videoLayout.layoutParams.apply {
@@ -304,6 +306,7 @@ class MainActivity : AppCompatActivity() {
         videoGrid.visibility = android.view.View.VISIBLE
         backButton.visibility = android.view.View.GONE
         playPauseButton.visibility = android.view.View.GONE
+        playbackControls.visibility = android.view.View.GONE
         emptyMessage.visibility = android.view.View.VISIBLE
         openVideoButton.visibility = android.view.View.VISIBLE
         storageButton.visibility = android.view.View.VISIBLE
