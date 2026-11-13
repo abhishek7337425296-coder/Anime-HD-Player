@@ -1,13 +1,22 @@
 package com.animehd.player
 
+import android.Manifest
+import android.content.ContentUris
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.content.pm.ActivityInfo
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.provider.MediaStore
 import android.provider.OpenableColumns
 import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
-import androidx.documentfile.provider.DocumentFile
+import androidx.core.content.ContextCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
@@ -22,30 +31,41 @@ class MainActivity : AppCompatActivity() {
     private lateinit var playerView: PlayerView
     private lateinit var statusText: TextView
     private lateinit var emptyMessage: TextView
+    private lateinit var rootLayout: android.widget.LinearLayout
+    private lateinit var titleView: TextView
+    private lateinit var openVideoButton: MaterialButton
+    private lateinit var storageButton: MaterialButton
+    private lateinit var episodesButton: MaterialButton
+    private lateinit var audioButton: MaterialButton
     private var videoItems: List<VideoEntry> = emptyList()
+    private var fullscreen = false
     private data class VideoEntry(val name: String, val uri: Uri)
 
     private val openVideo = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        uri?.let { keepReadPermission(it); playVideo(it, displayName(it)) }
+        uri?.let { playVideo(it, displayName(it)) }
     }
-    private val chooseFolder = registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
-        uri?.let {
-            try { contentResolver.takePersistableUriPermission(it, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
-            catch (_: SecurityException) { }
-            scanFolder(it)
-        }
+    private val requestVideoAccess = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { results ->
+        val allowed = results.values.any { it } || hasVideoPermission()
+        if (allowed) loadPhoneVideos()
+        else statusText.text = "Video access was not allowed. Enable video access in app settings."
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
+        rootLayout = findViewById(R.id.rootLayout)
+        titleView = findViewById(R.id.titleView)
         playerView = findViewById(R.id.playerView)
         statusText = findViewById(R.id.statusText)
         emptyMessage = findViewById(R.id.emptyMessage)
-        findViewById<MaterialButton>(R.id.openVideoButton).setOnClickListener { openVideo.launch(arrayOf("video/*")) }
-        findViewById<MaterialButton>(R.id.folderButton).setOnClickListener { chooseFolder.launch(null) }
-        findViewById<MaterialButton>(R.id.episodesButton).setOnClickListener { showEpisodes() }
-        findViewById<MaterialButton>(R.id.audioButton).setOnClickListener { showTrackOptions() }
+        openVideoButton = findViewById(R.id.openVideoButton)
+        storageButton = findViewById(R.id.folderButton)
+        episodesButton = findViewById(R.id.episodesButton)
+        audioButton = findViewById(R.id.audioButton)
+        openVideoButton.setOnClickListener { openVideo.launch(arrayOf("video/*")) }
+        storageButton.setOnClickListener { requestPhoneVideoAccess() }
+        episodesButton.setOnClickListener { showEpisodes() }
+        audioButton.setOnClickListener { showTrackOptions() }
         initializePlayer()
         handleIncomingIntent(intent)
     }
@@ -61,17 +81,14 @@ class MainActivity : AppCompatActivity() {
         val uri = when (incoming.action) {
             Intent.ACTION_VIEW -> incoming.data
             Intent.ACTION_SEND -> {
-                @Suppress("DEPRECATION")
-                incoming.getParcelableExtra(Intent.EXTRA_STREAM) as? Uri
+                incoming.clipData?.getItemAt(0)?.uri ?: run {
+                    @Suppress("DEPRECATION")
+                    incoming.getParcelableExtra(Intent.EXTRA_STREAM) as? Uri
+                }
             }
             else -> null
         }
-        uri?.let { keepReadPermission(it); playVideo(it, displayName(it)) }
-    }
-
-    private fun keepReadPermission(uri: Uri) {
-        try { contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
-        catch (_: SecurityException) { }
+        uri?.let { playVideo(it, displayName(it)) }
     }
 
     private fun displayName(uri: Uri): String {
@@ -87,21 +104,64 @@ class MainActivity : AppCompatActivity() {
         return name
     }
 
+    private fun requiredVideoPermissions(): Array<String> = when {
+        Build.VERSION.SDK_INT >= 34 -> arrayOf(
+            Manifest.permission.READ_MEDIA_VIDEO,
+            Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED
+        )
+        Build.VERSION.SDK_INT >= 33 -> arrayOf(Manifest.permission.READ_MEDIA_VIDEO)
+        else -> arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
+    }
+
+    private fun hasVideoPermission(): Boolean {
+        return requiredVideoPermissions().any {
+            ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED
+        }
+    }
+
+    private fun requestPhoneVideoAccess() {
+        if (hasVideoPermission()) loadPhoneVideos()
+        else requestVideoAccess.launch(requiredVideoPermissions())
+    }
+
+    private fun loadPhoneVideos() {
+        statusText.text = "Loading videos from phone storage…"
+        val found = mutableListOf<VideoEntry>()
+        val collection = MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+        val projection = arrayOf(MediaStore.Video.Media._ID, MediaStore.Video.Media.DISPLAY_NAME)
+        try {
+            contentResolver.query(collection, projection, null, null, "${MediaStore.Video.Media.DATE_ADDED} DESC")?.use { cursor ->
+                val idColumn = cursor.getColumnIndexOrThrow(MediaStore.Video.Media._ID)
+                val nameColumn = cursor.getColumnIndexOrThrow(MediaStore.Video.Media.DISPLAY_NAME)
+                while (cursor.moveToNext()) {
+                    val id = cursor.getLong(idColumn)
+                    val name = cursor.getString(nameColumn) ?: "Video"
+                    found.add(VideoEntry(name, ContentUris.withAppendedId(collection, id)))
+                }
+            }
+            videoItems = found.sortedWith { a, b -> naturalCompare(a.name, b.name) }
+            statusText.text = "Found ${videoItems.size} phone video(s) • Episode-number order"
+            if (videoItems.isNotEmpty()) showEpisodes()
+            else emptyMessage.text = "No indexed videos found. Save Telegram videos to Downloads or Movies first."
+        } catch (e: SecurityException) {
+            statusText.text = "Storage access was limited. Allow video access in Android app settings."
+        } catch (e: Exception) {
+            statusText.text = "Could not read phone videos: ${e.javaClass.simpleName}"
+        }
+    }
+
     private fun initializePlayer() {
         if (player != null) return
         player = ExoPlayer.Builder(this).build().also { exo ->
             playerView.player = exo
             exo.addListener(object : Player.Listener {
                 override fun onPlaybackStateChanged(playbackState: Int) {
-                    statusText.text = when (playbackState) {
-                        Player.STATE_BUFFERING -> "Loading video…"
-                        Player.STATE_READY -> "Ready • Offline playback • No ads"
-                        Player.STATE_ENDED -> "Playback finished"
-                        else -> "Choose a video or folder"
-                    }
+                    if (playbackState == Player.STATE_BUFFERING) statusText.text = "Loading video…"
+                    if (playbackState == Player.STATE_READY) statusText.text = "Playing • Offline • No ads"
+                    if (playbackState == Player.STATE_ENDED) statusText.text = "Playback finished"
                 }
                 override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
-                    statusText.text = "Can't decode this video (${error.errorCodeName}). Try MP4/H.264."
+                    statusText.text = "Playback error: ${error.errorCodeName}. Send me a screenshot of this message."
                 }
             })
         }
@@ -110,36 +170,55 @@ class MainActivity : AppCompatActivity() {
     private fun playVideo(uri: Uri, name: String) {
         initializePlayer()
         emptyMessage.text = name
+        enterFullscreen()
         player?.setMediaItem(MediaItem.fromUri(uri))
         player?.prepare()
         player?.playWhenReady = true
     }
 
-    private fun scanFolder(treeUri: Uri) {
-        statusText.text = "Scanning selected folder…"
-        val root = DocumentFile.fromTreeUri(this, treeUri)
-        if (root == null) { statusText.text = "Could not open this folder."; return }
-        val found = mutableListOf<VideoEntry>()
-        collectVideos(root, found, 0)
-        videoItems = found.sortedWith { a, b -> naturalCompare(a.name, b.name) }
-        statusText.text = "Found ${videoItems.size} video(s) • Sorted by episode number"
-        if (videoItems.isNotEmpty()) showEpisodes()
-        else emptyMessage.text = "No supported video files found in this folder."
+    private fun enterFullscreen() {
+        if (fullscreen) return
+        fullscreen = true
+        requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+        titleView.visibility = android.view.View.GONE
+        emptyMessage.visibility = android.view.View.GONE
+        openVideoButton.visibility = android.view.View.GONE
+        storageButton.visibility = android.view.View.GONE
+        episodesButton.visibility = android.view.View.GONE
+        audioButton.visibility = android.view.View.GONE
+        statusText.visibility = android.view.View.GONE
+        rootLayout.setPadding(0, 0, 0, 0)
+        playerView.layoutParams = playerView.layoutParams.apply {
+            height = 0
+            (this as android.widget.LinearLayout.LayoutParams).weight = 1f
+        }
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        WindowInsetsControllerCompat(window, window.decorView).hide(WindowInsetsCompat.Type.systemBars())
     }
 
-    private fun collectVideos(folder: DocumentFile, output: MutableList<VideoEntry>, depth: Int) {
-        if (depth > 8) return
-        try {
-            for (file in folder.listFiles()) {
-                if (file.isDirectory) collectVideos(file, output, depth + 1)
-                else if (file.isFile && isVideoFile(file.name ?: "")) output.add(VideoEntry(file.name ?: "Video", file.uri))
-            }
-        } catch (_: SecurityException) { }
+    private fun exitFullscreen() {
+        if (!fullscreen) return
+        fullscreen = false
+        requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        titleView.visibility = android.view.View.VISIBLE
+        emptyMessage.visibility = android.view.View.VISIBLE
+        openVideoButton.visibility = android.view.View.VISIBLE
+        storageButton.visibility = android.view.View.VISIBLE
+        episodesButton.visibility = android.view.View.VISIBLE
+        audioButton.visibility = android.view.View.VISIBLE
+        statusText.visibility = android.view.View.VISIBLE
+        rootLayout.setPadding(16, 16, 16, 16)
+        playerView.layoutParams = playerView.layoutParams.apply {
+            height = 0
+            (this as android.widget.LinearLayout.LayoutParams).weight = 1f
+        }
+        WindowInsetsControllerCompat(window, window.decorView).show(WindowInsetsCompat.Type.systemBars())
+        WindowCompat.setDecorFitsSystemWindows(window, true)
     }
 
-    private fun isVideoFile(name: String): Boolean {
-        val lower = name.lowercase(Locale.ROOT)
-        return listOf(".mp4", ".mkv", ".webm", ".3gp", ".mov", ".m4v", ".ts", ".avi").any { lower.endsWith(it) }
+    @Deprecated("Deprecated in Android 13; retained for the app's back navigation")
+    override fun onBackPressed() {
+        if (fullscreen) exitFullscreen() else super.onBackPressed()
     }
 
     private fun naturalCompare(first: String, second: String): Int {
@@ -155,7 +234,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showEpisodes() {
-        if (videoItems.isEmpty()) { statusText.text = "Choose a folder first to scan your episodes."; return }
+        if (videoItems.isEmpty()) { statusText.text = "Tap Phone videos to scan your storage."; return }
         MaterialAlertDialogBuilder(this)
             .setTitle("Episodes • ${videoItems.size} videos")
             .setItems(videoItems.map { it.name }.toTypedArray()) { _, which ->
