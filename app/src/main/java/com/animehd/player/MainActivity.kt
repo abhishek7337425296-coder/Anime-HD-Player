@@ -8,6 +8,7 @@ import android.content.pm.ActivityInfo
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.ParcelFileDescriptor
 import android.provider.MediaStore
 import android.provider.OpenableColumns
 import android.widget.TextView
@@ -29,6 +30,7 @@ import java.util.Locale
 class MainActivity : AppCompatActivity() {
     private var libVLC: LibVLC? = null
     private var player: MediaPlayer? = null
+    private var currentVideoFd: ParcelFileDescriptor? = null
     private lateinit var videoLayout: VLCVideoLayout
     private lateinit var statusText: TextView
     private lateinit var emptyMessage: TextView
@@ -188,13 +190,24 @@ class MainActivity : AppCompatActivity() {
         enterFullscreen()
         try {
             mediaPlayer.stop()
-            val media = Media(vlc, uri)
+            currentVideoFd?.close()
+            currentVideoFd = null
+
+            // LibVLC cannot reliably read every Android content:// provider URI
+            // directly. Open it through Android's ContentResolver and pass VLC
+            // an fd:// media URI while keeping the descriptor alive.
+            val descriptor = contentResolver.openFileDescriptor(uri, "r")
+                ?: throw IllegalStateException("Android could not open this video")
+            currentVideoFd = descriptor
+            val media = Media(vlc, Uri.parse("fd://${descriptor.fd}"))
             media.setHWDecoderEnabled(true, false)
             mediaPlayer.media = media
             media.release()
             mediaPlayer.play()
         } catch (e: Exception) {
-            statusText.text = "Could not open this Telegram file: ${e.javaClass.simpleName}"
+            currentVideoFd?.close()
+            currentVideoFd = null
+            statusText.text = "Could not open video: ${e.message ?: e.javaClass.simpleName}"
         }
     }
 
@@ -302,6 +315,8 @@ class MainActivity : AppCompatActivity() {
     override fun onStop() {
         super.onStop()
         player?.stop()
+        currentVideoFd?.close()
+        currentVideoFd = null
         player?.detachViews()
         player?.release()
         player = null
