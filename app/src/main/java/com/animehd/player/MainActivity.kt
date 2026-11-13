@@ -474,25 +474,31 @@ class MainActivity : AppCompatActivity() {
             statusText.text = "Open a video first to choose audio or subtitles."
             return
         }
-        val options = mutableListOf<String>()
-        val actions = mutableListOf<() -> Unit>()
-        mediaPlayer.audioTracks?.forEach { track ->
-            options.add("Audio: ${track.name}")
-            actions.add { mediaPlayer.setAudioTrack(track.id) }
-        }
-        mediaPlayer.spuTracks?.forEach { track ->
-            options.add("Subtitle: ${track.name}")
-            actions.add { mediaPlayer.setSpuTrack(track.id) }
-        }
-        options.add("Disable subtitles")
-        actions.add { mediaPlayer.setSpuTrack(-1) }
-        if (options.isEmpty()) {
-            statusText.text = "No selectable audio or subtitle tracks found."
+        val audioTracks = mediaPlayer.audioTracks?.toList().orEmpty()
+        val subtitleTracks = mediaPlayer.spuTracks?.toList().orEmpty()
+        if (audioTracks.isEmpty() && subtitleTracks.isEmpty()) {
+            statusText.text = "This file has no selectable audio or subtitle tracks."
             return
         }
-        MaterialAlertDialogBuilder(this).setTitle("Audio and subtitles")
+        val options = mutableListOf<String>()
+        val actions = mutableListOf<() -> Unit>()
+        audioTracks.forEach { track ->
+            options.add("Audio • ${track.name}")
+            actions.add { mediaPlayer.setAudioTrack(track.id) }
+        }
+        subtitleTracks.forEach { track ->
+            options.add("Subtitle • ${track.name}")
+            actions.add { mediaPlayer.setSpuTrack(track.id) }
+        }
+        if (subtitleTracks.isNotEmpty()) {
+            options.add("Turn subtitles off")
+            actions.add { mediaPlayer.setSpuTrack(-1) }
+        }
+        MaterialAlertDialogBuilder(this)
+            .setTitle("Audio tracks and subtitles")
             .setItems(options.toTypedArray()) { _, which -> actions[which]() }
-            .setNegativeButton("Close", null).show()
+            .setNegativeButton("Close", null)
+            .show()
     }
 
     override fun onStart() {
