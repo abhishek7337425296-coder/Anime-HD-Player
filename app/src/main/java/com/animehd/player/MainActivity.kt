@@ -748,7 +748,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showPlaybackSettings() {
-        val options = arrayOf("Playback speed", "Screen brightness", "Reset screen brightness", "Double-tap seek interval")
+        val options = arrayOf("Playback speed", "Screen brightness", "Reset screen brightness", "Gesture settings")
         MaterialAlertDialogBuilder(this)
             .setTitle("Playback settings")
             .setItems(options) { _, which ->
@@ -761,19 +761,19 @@ class MainActivity : AppCompatActivity() {
                         window.attributes = attributes
                         statusText.text = "Screen brightness follows device setting"
                     }
-                    3 -> showSeekIntervalOptions()
+                    3 -> showGestureSettings()
                 }
             }
             .setNegativeButton("Close", null)
             .show()
     }
 
-    private fun showSeekIntervalOptions() {
+    private fun showGestureSettings() {
         val labels = arrayOf("5 seconds", "10 seconds", "15 seconds", "20 seconds", "30 seconds")
         val values = longArrayOf(5_000L, 10_000L, 15_000L, 20_000L, 30_000L)
         val selected = values.indexOf(seekIntervalMs).coerceAtLeast(0)
         MaterialAlertDialogBuilder(this)
-            .setTitle("Double-tap seek interval")
+            .setTitle("Gesture settings • Double-tap seek")
             .setSingleChoiceItems(labels, selected) { dialog, which ->
                 seekIntervalMs = values[which]
                 dialog.dismiss()
