@@ -5,17 +5,22 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
-    android:background="#101014"
+    android:background="@drawable/home_anime_poster"
     android:padding="12dp">
 
     <TextView
         android:id="@+id/titleView"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="Anime HD Player"
+        android:text="Anime_Hd_Player"
         android:textColor="#FFFFFF"
-        android:textSize="24sp"
+        android:textSize="27sp"
+        android:fontFamily="sans-serif-black"
         android:textStyle="bold"
+        android:shadowColor="#99000000"
+        android:shadowRadius="8"
+        android:shadowDx="1"
+        android:shadowDy="2"
         android:paddingBottom="8dp" />
 
     <TextView
@@ -124,29 +129,13 @@
                 android:gravity="center">
 
                 <com.google.android.material.button.MaterialButton
-                    android:id="@+id/seekBackButton"
-                    style="@style/Widget.MaterialComponents.Button.OutlinedButton"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:minWidth="0dp"
-                    android:text="-10s" />
-
-                <com.google.android.material.button.MaterialButton
                     android:id="@+id/playPauseButton"
-                android:layout_width="64dp"
-                android:layout_height="64dp"
-                android:minWidth="0dp"
-                android:text="Ⅱ"
-                android:textSize="24sp"
-                    android:contentDescription="Play or pause" />
-
-                <com.google.android.material.button.MaterialButton
-                    android:id="@+id/seekForwardButton"
-                    style="@style/Widget.MaterialComponents.Button.OutlinedButton"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
+                    android:layout_width="68dp"
+                    android:layout_height="68dp"
                     android:minWidth="0dp"
-                    android:text="+10s" />
+                    android:text="Ⅱ"
+                    android:textSize="26sp"
+                    android:contentDescription="Play or pause" />
             </LinearLayout>
 
             <View
