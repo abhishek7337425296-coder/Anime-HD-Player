@@ -351,7 +351,8 @@ class MainActivity : AppCompatActivity() {
                 }
             }
             videoItems = found.sortedWith { a, b -> naturalCompare(a.name, b.name) }
-            statusText.text = "Found ${videoItems.size} phone video(s) • Episode-number order"
+            statusText.text = "Found ${videoItems.size} phone video(s)"
+            statusText.visibility = View.GONE
             if (videoItems.isNotEmpty()) {
                 emptyMessage.text = "${videoItems.size} videos • Tap a thumbnail to play"
                 videoGrid.adapter = object : BaseAdapter() {
@@ -856,6 +857,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun friendlyTrackName(raw: String?, fallback: String): String {
         val value = raw.orEmpty()
+        val languageCodes = mapOf("te" to "Telugu", "ta" to "Tamil", "hi" to "Hindi", "en" to "English", "ja" to "Japanese", "ko" to "Korean", "zh" to "Chinese")
+        languageCodes[value.lowercase(Locale.ROOT).substringBefore('-')]?.let { return it }
         val known = listOf("Telugu", "Tamil", "Hindi", "English", "Japanese", "Korean", "Chinese", "Spanish", "French", "German", "Arabic", "Portuguese", "Russian")
         known.firstOrNull { value.contains(it, ignoreCase = true) }?.let { return it }
         val cleaned = value.substringBefore(",").substringAfterLast(" - ")
@@ -936,7 +939,7 @@ class MainActivity : AppCompatActivity() {
             actions.add { mediaPlayer.setSpuTrack(-1) }
         }
         MaterialAlertDialogBuilder(this)
-            .setTitle("Audio tracks and subtitles")
+            .setTitle("Audio & subtitles")
             .setItems(options.toTypedArray()) { _, which -> actions[which]() }
             .setNegativeButton("Close", null)
             .show()
