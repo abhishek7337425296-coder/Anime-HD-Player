@@ -31,6 +31,8 @@ import kotlin.math.roundToInt
 import android.view.ViewGroup
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.media3.common.MediaItem
+import androidx.media3.common.C
+import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.Player
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.util.UnstableApi
@@ -814,6 +816,50 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showTrackOptions() {
+        if (media3Active) {
+            val ep = exoPlayer ?: return
+            val options = mutableListOf<String>()
+            val actions = mutableListOf<() -> Unit>()
+            ep.currentTracks.groups.forEach { group ->
+                val isAudio = group.type == C.TRACK_TYPE_AUDIO
+                val isText = group.type == C.TRACK_TYPE_TEXT
+                if (isAudio || isText) {
+                    for (index in 0 until group.length) {
+                        val format = group.getTrackFormat(index)
+                        val kind = if (isAudio) "Audio" else "Subtitle"
+                        val label = format.label ?: format.language ?: "Track ${index + 1}"
+                        options.add("$kind • $label")
+                        actions.add {
+                            val override = TrackSelectionOverride(group.mediaTrackGroup, listOf(index))
+                            ep.trackSelectionParameters = ep.trackSelectionParameters.buildUpon()
+                                .setTrackTypeDisabled(group.type, false)
+                                .clearOverridesOfType(group.type)
+                                .addOverride(override)
+                                .build()
+                        }
+                    }
+                }
+            }
+            if (ep.currentTracks.groups.any { it.type == C.TRACK_TYPE_TEXT }) {
+                options.add("Turn subtitles off")
+                actions.add {
+                    ep.trackSelectionParameters = ep.trackSelectionParameters.buildUpon()
+                        .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
+                        .clearOverridesOfType(C.TRACK_TYPE_TEXT)
+                        .build()
+                }
+            }
+            if (options.isEmpty()) {
+                statusText.text = "No selectable audio or subtitle tracks were found."
+                return
+            }
+            MaterialAlertDialogBuilder(this)
+                .setTitle("Audio tracks and subtitles")
+                .setItems(options.toTypedArray()) { _, which -> actions[which]() }
+                .setNegativeButton("Close", null)
+                .show()
+            return
+        }
         val mediaPlayer = player
         if (mediaPlayer == null || mediaPlayer.media == null) {
             statusText.text = "Open a video first to choose audio or subtitles."
