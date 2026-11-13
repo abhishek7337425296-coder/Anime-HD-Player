@@ -57,6 +57,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var audioButton: MaterialButton
     private lateinit var videoGrid: GridView
     private lateinit var playPauseButton: MaterialButton
+    private lateinit var seekBackButton: MaterialButton
+    private lateinit var seekForwardButton: MaterialButton
     private lateinit var backButton: MaterialButton
     private val uiHandler = Handler(Looper.getMainLooper())
     private var userSeeking = false
@@ -108,9 +110,13 @@ class MainActivity : AppCompatActivity() {
         audioButton = findViewById(R.id.audioButton)
         videoGrid = findViewById(R.id.videoGrid)
         playPauseButton = findViewById(R.id.playPauseButton)
+        seekBackButton = findViewById(R.id.seekBackButton)
+        seekForwardButton = findViewById(R.id.seekForwardButton)
         backButton = findViewById(R.id.backButton)
         videoContainer.visibility = android.view.View.GONE
         playPauseButton.setOnClickListener { player?.let { if (it.isPlaying) { it.pause(); playPauseButton.text = "▶" } else { it.play(); playPauseButton.text = "Ⅱ" } } }
+        seekBackButton.setOnClickListener { seekBy(-10_000L) }
+        seekForwardButton.setOnClickListener { seekBy(10_000L) }
         settingsButton.setOnClickListener { showPlaybackSettings() }
         seekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(bar: SeekBar?, progress: Int, fromUser: Boolean) {
@@ -352,6 +358,13 @@ class MainActivity : AppCompatActivity() {
     @Deprecated("Deprecated in Android 13; retained for the app's back navigation")
     override fun onBackPressed() {
         if (fullscreen) exitFullscreen() else super.onBackPressed()
+    }
+
+    private fun seekBy(offsetMs: Long) {
+        val mp = player ?: return
+        val length = mp.length
+        if (length <= 0L || !mp.isSeekable) return
+        mp.setTime((mp.time + offsetMs).coerceIn(0L, length))
     }
 
     private fun formatTime(milliseconds: Long): String {
