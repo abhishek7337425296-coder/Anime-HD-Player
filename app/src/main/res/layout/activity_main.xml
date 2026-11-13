@@ -24,7 +24,7 @@
         android:textColor="#C8C5D0"
         android:textSize="14sp"
         android:paddingBottom="12dp" />
-    <org.videolan.libvlc.util.VLCVideoLayout
+    <GridView\n        android:id="@+id/videoGrid"\n        android:layout_width="match_parent"\n        android:layout_height="0dp"\n        android:layout_weight="1"\n        android:numColumns="2"\n        android:verticalSpacing="8dp"\n        android:horizontalSpacing="8dp"\n        android:stretchMode="columnWidth"\n        android:visibility="visible" />\n    <org.videolan.libvlc.util.VLCVideoLayout
         android:id="@+id/playerView"
         android:layout_width="match_parent"
         android:layout_height="0dp"
