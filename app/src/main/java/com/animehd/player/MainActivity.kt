@@ -92,15 +92,27 @@ class MainActivity : AppCompatActivity() {
     private val progressUpdater = object : Runnable {
         override fun run() {
             val mp = player
-            if (mp != null && fullscreen && !userSeeking) {
-                val length = mp.length.coerceAtLeast(0L)
-                val time = mp.time.coerceAtLeast(0L)
-                if (length > 0L) {
-                    seekBar.progress = ((time * 1000L) / length).toInt().coerceIn(0, 1000)
-                    durationText.text = formatTime(length)
-                    currentTimeText.text = formatTime(time)
+            if (fullscreen && !userSeeking) {
+                if (media3Active) {
+                    val ep = exoPlayer
+                    val length = ep?.duration?.takeIf { it > 0L } ?: 0L
+                    val time = ep?.currentPosition?.coerceAtLeast(0L) ?: 0L
+                    if (length > 0L) {
+                        seekBar.progress = ((time * 1000L) / length).toInt().coerceIn(0, 1000)
+                        durationText.text = formatTime(length)
+                        currentTimeText.text = formatTime(time)
+                    }
+                    playPauseButton.text = if (ep?.isPlaying == true) "Ⅱ" else "▶"
+                } else if (mp != null) {
+                    val length = mp.length.coerceAtLeast(0L)
+                    val time = mp.time.coerceAtLeast(0L)
+                    if (length > 0L) {
+                        seekBar.progress = ((time * 1000L) / length).toInt().coerceIn(0, 1000)
+                        durationText.text = formatTime(length)
+                        currentTimeText.text = formatTime(time)
+                    }
+                    playPauseButton.text = if (mp.isPlaying) "Ⅱ" else "▶"
                 }
-                playPauseButton.text = if (mp.isPlaying) "Ⅱ" else "▶"
             }
             uiHandler.postDelayed(this, 500L)
         }
@@ -173,21 +185,31 @@ class MainActivity : AppCompatActivity() {
         setupGestureHud()
         playerOverlay.setOnTouchListener { _, event -> handleOverlayTouch(event) }
         videoContainer.visibility = View.GONE
-        playPauseButton.setOnClickListener { player?.let { if (it.isPlaying) { it.pause(); playPauseButton.text = "▶" } else { it.play(); playPauseButton.text = "Ⅱ" } }; revealControls() }
+        playPauseButton.setOnClickListener {
+            if (media3Active) {
+                exoPlayer?.let { if (it.isPlaying) { it.pause(); playPauseButton.text = "▶" } else { it.play(); playPauseButton.text = "Ⅱ" } }
+            } else {
+                player?.let { if (it.isPlaying) { it.pause(); playPauseButton.text = "▶" } else { it.play(); playPauseButton.text = "Ⅱ" } }
+            }
+            revealControls()
+        }
         seekBackButton.setOnClickListener { seekBy(-10_000L); revealControls() }
         seekForwardButton.setOnClickListener { seekBy(10_000L); revealControls() }
         settingsButton.setOnClickListener { showPlaybackSettings(); revealControls() }
         seekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(bar: SeekBar?, progress: Int, fromUser: Boolean) {
                 if (fromUser) {
-                    val length = player?.length ?: 0L
+                    val length = if (media3Active) (exoPlayer?.duration ?: 0L) else (player?.length ?: 0L)
                     if (length > 0L) currentTimeText.text = formatTime(length * progress / 1000L)
                 }
             }
             override fun onStartTrackingTouch(bar: SeekBar?) { userSeeking = true; revealControls() }
             override fun onStopTrackingTouch(bar: SeekBar?) {
-                val length = player?.length ?: 0L
-                if (length > 0L) player?.setTime(length * (bar?.progress ?: 0) / 1000L)
+                val length = if (media3Active) (exoPlayer?.duration ?: 0L) else (player?.length ?: 0L)
+                if (length > 0L) {
+                    val target = length * (bar?.progress ?: 0) / 1000L
+                    if (media3Active) exoPlayer?.seekTo(target) else player?.setTime(target)
+                }
                 userSeeking = false
             }
         })
