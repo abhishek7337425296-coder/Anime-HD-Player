@@ -12,6 +12,7 @@ import android.os.ParcelFileDescriptor
 import android.provider.MediaStore
 import android.provider.OpenableColumns
 import android.widget.TextView
+import android.widget.LinearLayout
 import android.widget.GridView
 import android.widget.BaseAdapter
 import android.widget.ImageView
