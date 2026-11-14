@@ -144,6 +144,9 @@ class MainActivity : AppCompatActivity() {
     // This is not an Anime4K implementation or AI upscaling.
     private var totalDeviceRamGb = 0.0
     private var ramPerformanceProfile = "Lite"
+    // 0 = original, 1 = Lite shader, 2 = High shader (requires >= 6 GB RAM).
+    private var animeShaderMode = 1
+    private var animeHighUnlocked = false
     private val hideControlsRunnable = Runnable {
         if (fullscreen && (if (media3Active) exoPlayer?.isPlaying == true else player?.isPlaying == true)) setControlsVisible(false)
     }
@@ -249,19 +252,7 @@ class MainActivity : AppCompatActivity() {
         backButton.setOnClickListener { player?.stop(); exoPlayer?.pause(); exitFullscreen() }
         audioButton.setOnClickListener { showTrackOptions(); revealControls() }
         hdButton.setOnClickListener {
-            val uri = currentVideoUri
-            if (uri == null || player == null) {
-                statusText.text = "Open a video before enabling HD Enhance."
-            } else {
-                hdEnhancementEnabled = !hdEnhancementEnabled
-                pendingSeekMs = if (media3Active) (exoPlayer?.currentPosition ?: 0L) else (player?.time ?: 0L).coerceAtLeast(0L)
-                hdButton.text = if (hdEnhancementEnabled) "HD: ON" else "HD: OFF"
-                statusText.text = if (hdEnhancementEnabled)
-                    "Applying real-time edge sharpening…"
-                else
-                    "HD sharpening turned off"
-                playVideo(uri, currentVideoName)
-            }
+            showAnimeShaderOptions()
             revealControls()
         }
         enhanceButton.setOnClickListener {
@@ -410,7 +401,10 @@ class MainActivity : AppCompatActivity() {
         val memoryInfo = android.app.ActivityManager.MemoryInfo()
         activityManager?.getMemoryInfo(memoryInfo)
         totalDeviceRamGb = memoryInfo.totalMem.toDouble() / (1024.0 * 1024.0 * 1024.0)
-        ramPerformanceProfile = if (totalDeviceRamGb >= 6.0) "High" else "Lite"
+        animeHighUnlocked = totalDeviceRamGb >= 6.0
+        ramPerformanceProfile = if (animeHighUnlocked) "High" else "Lite"
+        animeShaderMode = 1 // Automatically start in the conservative Lite profile.
+        hdButton.text = "Anime4K: Lite"
         statusText.text = String.format(
             Locale.ROOT,
             "RAM detected: %.1f GB • %s performance profile",
@@ -431,11 +425,16 @@ class MainActivity : AppCompatActivity() {
                     thermalProtectionActive = true
                     if (enhancementEnabled || hdEnhancementEnabled) {
                         val uri = currentVideoUri
-                        pendingSeekMs = player?.time?.coerceAtLeast(0L) ?: 0L
+                        pendingSeekMs = if (media3Active) {
+                            exoPlayer?.currentPosition?.coerceAtLeast(0L) ?: 0L
+                        } else {
+                            player?.time?.coerceAtLeast(0L) ?: 0L
+                        }
                         enhancementEnabled = false
                         hdEnhancementEnabled = false
+                        animeShaderMode = 0
                         enhanceButton.text = "Auto Enhance"
-                        hdButton.text = "HD: OFF"
+                        hdButton.text = "Anime4K: OFF"
                         if (uri != null) playVideo(uri, currentVideoName)
                     }
                     statusText.text = "Device is very hot • video enhancements paused to reduce heat"
@@ -541,7 +540,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun playVideo(uri: Uri, name: String) {
-        // Keep HD playback on the same LibVLC decoder path as normal playback.
+        if (animeShaderMode > 0 && !thermalProtectionActive) {
+            playVideoWithGpuEnhancement(uri, name, animeShaderMode)
+            return
+        }
+        // Keep original playback on the stable LibVLC decoder path.
         // The Media3/OpenGL path caused a black video and lost audio on some devices
         // (including the reported SM-T220). VLC's built-in sharpen filter is applied
         // below when HD is enabled, avoiding an engine switch during playback.
@@ -605,7 +608,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     @OptIn(UnstableApi::class)
-    private fun playVideoWithGpuEnhancement(uri: Uri, name: String) {
+    private fun playVideoWithGpuEnhancement(uri: Uri, name: String, mode: Int) {
         currentVideoUri = uri
         currentVideoName = name
         emptyMessage.text = name
@@ -622,23 +625,30 @@ class MainActivity : AppCompatActivity() {
                     override fun onPlaybackStateChanged(playbackState: Int) {
                         if (!media3Active) return
                         when (playbackState) {
-                            Player.STATE_BUFFERING -> statusText.text = "GPU HD: buffering…"
+                            Player.STATE_BUFFERING -> statusText.text = "GPU shader: buffering…"
                             Player.STATE_READY -> {
-                                statusText.text = "GPU HD sharpening active • OpenGL processing"
+                                val profile = if (mode == 2) "Anime4K High" else "Anime4K Lite"
+                                statusText.text = "$profile-style edge sharpening active • custom offline GLES shader"
                                 scheduleHideControls()
                             }
                             Player.STATE_ENDED -> statusText.text = "Playback finished"
                         }
                     }
                     override fun onPlayerError(error: PlaybackException) {
-                        statusText.text = "This file needs VLC compatibility playback. Turn HD off to use VLC."
+                        if (!media3Active) return
+                        pendingSeekMs = exoPlayer?.currentPosition?.coerceAtLeast(0L) ?: 0L
+                        animeShaderMode = 0
+                        hdButton.text = "Anime4K: OFF"
+                        media3Active = false
+                        statusText.text = "GPU shader playback failed • returning to LibVLC original playback"
+                        currentVideoUri?.let { playVideo(it, currentVideoName) }
                     }
                 })
             }
             media3Active = true
             videoLayout.visibility = View.GONE
             media3View.visibility = View.VISIBLE
-            ep.setVideoEffects(listOf(GpuSharpnessEffect(0.16f)))
+            ep.setVideoEffects(listOf(AnimeLineShaderEffect(highQuality = mode == 2)))
             ep.setMediaItem(MediaItem.fromUri(uri))
             ep.prepare()
             if (pendingSeekMs > 0L) {
@@ -646,14 +656,56 @@ class MainActivity : AppCompatActivity() {
                 pendingSeekMs = 0L
             }
             ep.playWhenReady = true
-            hdButton.text = "HD: ON"
-            statusText.text = "Starting GPU-based HD sharpening…"
+            hdButton.text = if (mode == 2) "Anime4K: High" else "Anime4K: Lite"
+            statusText.text = "Starting custom offline OpenGL ES line shader…"
         } catch (e: Exception) {
             media3Active = false
             media3View.visibility = View.GONE
             videoLayout.visibility = View.VISIBLE
             statusText.text = "GPU enhancement could not start: ${e.message ?: e.javaClass.simpleName}. Turn HD off for VLC playback."
         }
+    }
+
+    private fun showAnimeShaderOptions() {
+        val labels = if (animeHighUnlocked) {
+            arrayOf("Off (Original)", "Anime4K Lite", "Anime4K High")
+        } else {
+            arrayOf("Off (Original)", "Anime4K Lite", "Anime4K High • requires 6 GB RAM")
+        }
+        val selected = animeShaderMode.coerceIn(0, 2)
+        MaterialAlertDialogBuilder(this)
+            .setTitle("Video enhancement • " + String.format(Locale.ROOT, "%.1f", totalDeviceRamGb) + " GB RAM")
+            .setSingleChoiceItems(labels, selected) { dialog, which ->
+                if (which == 2 && !animeHighUnlocked) {
+                    statusText.text = "Anime4K High is locked on devices with less than 6 GB RAM."
+                    return@setSingleChoiceItems
+                }
+                if (thermalProtectionActive && which != 0) {
+                    statusText.text = "Enhancement is unavailable while thermal protection is active."
+                    return@setSingleChoiceItems
+                }
+                animeShaderMode = which
+                hdButton.text = when (which) {
+                    0 -> "Anime4K: OFF"
+                    1 -> "Anime4K: Lite"
+                    else -> "Anime4K: High"
+                }
+                val uri = currentVideoUri
+                if (uri != null) {
+                    pendingSeekMs = if (media3Active) {
+                        exoPlayer?.currentPosition?.coerceAtLeast(0L) ?: 0L
+                    } else {
+                        player?.time?.coerceAtLeast(0L) ?: 0L
+                    }
+                    if (which == 0) playVideo(uri, currentVideoName)
+                    else playVideoWithGpuEnhancement(uri, currentVideoName, which)
+                } else {
+                    statusText.text = if (which == 0) "Original video mode selected" else "Enhancement profile selected for the next video"
+                }
+                dialog.dismiss()
+            }
+            .setNegativeButton("Close", null)
+            .show()
     }
 
     private fun enterFullscreen() {
