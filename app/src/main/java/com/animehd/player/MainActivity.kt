@@ -733,22 +733,65 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showPlaybackSettings() {
-        val options = arrayOf("Playback speed", "Screen brightness", "Reset screen brightness", "Gesture settings")
+        val options = arrayOf("Playback speed", "Player volume (up to 200%)", "Screen brightness", "Reset screen brightness", "Gesture settings")
         MaterialAlertDialogBuilder(this)
             .setTitle("Playback settings")
             .setItems(options) { _, which ->
                 when (which) {
                     0 -> showPlaybackSpeedOptions()
-                    1 -> showScreenBrightnessControl()
-                    2 -> {
+                    1 -> showPlayerVolumeControl()
+                    2 -> showScreenBrightnessControl()
+                    3 -> {
                         val attributes = window.attributes
                         attributes.screenBrightness = -1f
                         window.attributes = attributes
                         statusText.text = "Screen brightness follows device setting"
                     }
-                    3 -> showGestureSettings()
+                    4 -> showGestureSettings()
                 }
             }
+            .setNegativeButton("Close", null)
+            .show()
+    }
+
+    private fun showPlayerVolumeControl() {
+        val volumeSeek = SeekBar(this).apply {
+            max = 200
+            progress = softwareVolumePercent.coerceIn(0, 200)
+        }
+        val volumeLabel = TextView(this).apply {
+            text = "Player volume: ${softwareVolumePercent}%"
+            setTextColor(0xFFFFFFFF.toInt())
+            textSize = 15f
+            setPadding(0, 0, 0, dp(8))
+        }
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(12), dp(20), dp(4))
+            addView(volumeLabel)
+            addView(volumeSeek)
+            addView(TextView(this@MainActivity).apply {
+                text = "Above 100% uses digital amplification and may cause distortion."
+                setTextColor(0xFFBBBBBB.toInt())
+                textSize = 12f
+                setPadding(0, dp(6), 0, 0)
+            })
+        }
+        volumeSeek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(bar: SeekBar?, value: Int, fromUser: Boolean) {
+                if (fromUser) {
+                    softwareVolumePercent = value.coerceIn(0, 200)
+                    player?.setVolume(softwareVolumePercent)
+                    volumeLabel.text = "Player volume: ${softwareVolumePercent}%"
+                }
+            }
+            override fun onStartTrackingTouch(bar: SeekBar?) {}
+            override fun onStopTrackingTouch(bar: SeekBar?) {}
+        })
+        MaterialAlertDialogBuilder(this)
+            .setTitle("Player volume")
+            .setView(content)
+            .setPositiveButton("Done", null)
             .setNegativeButton("Close", null)
             .show()
     }
