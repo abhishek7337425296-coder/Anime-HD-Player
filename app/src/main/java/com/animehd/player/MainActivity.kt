@@ -259,18 +259,21 @@ class MainActivity : AppCompatActivity() {
             } else {
                 enhancementEnabled = !enhancementEnabled
                 enhanceButton.text = if (enhancementEnabled) "Enhance: ON" else "Auto Enhance"
-                if (media3Active) {
-                    // The active GLES effect reads this state on its render thread every frame.
-                    activeAnimeShaderEffect?.setEnhancedEnabled(enhancementEnabled)
-                    statusText.text = if (enhancementEnabled) {
-                        "Live shader enhancement ON • stronger edge detail and color contrast"
+                if (enhancementEnabled) {
+                    // Auto Enhance selects High and runs the two-second comparison wipe.
+                    animeShaderMode = 2
+                    getSharedPreferences("player_settings", MODE_PRIVATE)
+                        .edit().putInt("anime_shader_mode", animeShaderMode).apply()
+                    hdButton.text = "Anime4K: High"
+                    pendingSeekMs = if (media3Active) {
+                        exoPlayer?.currentPosition?.coerceAtLeast(0L) ?: 0L
                     } else {
-                        "Live shader enhancement OFF • base Anime4K-style filter remains selected"
+                        player?.time?.coerceAtLeast(0L) ?: 0L
                     }
+                    playVideoWithGpuEnhancement(uri, currentVideoName, 2, startScan = true)
                 } else {
-                    pendingSeekMs = player?.time?.coerceAtLeast(0L) ?: 0L
-                    statusText.text = if (enhancementEnabled) "Applying automatic video enhancement…" else "Automatic enhancement turned off"
-                    playVideo(uri, currentVideoName)
+                    activeAnimeShaderEffect?.setEnhancedEnabled(false)
+                    statusText.text = "Auto Enhancement off • selected Anime4K profile remains active"
                 }
             }
         }
@@ -596,7 +599,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     @OptIn(UnstableApi::class)
-    private fun playVideoWithGpuEnhancement(uri: Uri, name: String, mode: Int) {
+    private fun playVideoWithGpuEnhancement(uri: Uri, name: String, mode: Int, startScan: Boolean = false) {
         currentVideoUri = uri
         currentVideoName = name
         emptyMessage.text = name
@@ -639,6 +642,7 @@ class MainActivity : AppCompatActivity() {
             media3View.visibility = View.VISIBLE
             val shaderEffect = AnimeLineShaderEffect(highQuality = mode == 2, initialEnhancementEnabled = enhancementEnabled)
             activeAnimeShaderEffect = shaderEffect
+            if (startScan) shaderEffect.startEnhancementScan()
             ep.setVideoEffects(listOf(shaderEffect))
             ep.setMediaItem(MediaItem.fromUri(uri))
             ep.prepare()
