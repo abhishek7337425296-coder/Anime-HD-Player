@@ -1,7 +1,6 @@
 package com.animehd.player
 
 import android.Manifest
-import android.app.ActivityManager
 import android.content.ContentUris
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -140,13 +139,9 @@ class MainActivity : AppCompatActivity() {
     private var thermalListener: PowerManager.OnThermalStatusChangedListener? = null
     private var latestThermalStatus = PowerManager.THERMAL_STATUS_NONE
     private var thermalProtectionActive = false
-    // Device RAM is used only to select a conservative conventional-sharpening profile.
-    // This is not an Anime4K implementation or AI upscaling.
-    private var totalDeviceRamGb = 0.0
-    private var ramPerformanceProfile = "Lite"
-    // 0 = original, 1 = Lite shader, 2 = High shader (requires >= 6 GB RAM).
-    private var animeShaderMode = 1
-    private var animeHighUnlocked = false
+    // 0 = original, 1 = Lite shader, 2 = High shader. No RAM-based lock or downgrade.
+    private var animeShaderMode = 0
+    private var activeAnimeShaderEffect: AnimeLineShaderEffect? = null
     private val hideControlsRunnable = Runnable {
         if (fullscreen && (if (media3Active) exoPlayer?.isPlaying == true else player?.isPlaying == true)) setControlsVisible(false)
     }
@@ -187,6 +182,8 @@ class MainActivity : AppCompatActivity() {
         audioButton = findViewById(R.id.audioButton)
         enhanceButton = findViewById(R.id.enhanceButton)
         hdButton = findViewById(R.id.hdButton)
+        animeShaderMode = getSharedPreferences("player_settings", MODE_PRIVATE).getInt("anime_shader_mode", 0).coerceIn(0, 2)
+        hdButton.text = when (animeShaderMode) { 0 -> "Anime4K: OFF"; 1 -> "Anime4K: Lite"; else -> "Anime4K: High" }
         videoGrid = findViewById(R.id.videoGrid)
         playPauseButton = findViewById(R.id.playPauseButton)
         gestureDetector = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
@@ -261,14 +258,23 @@ class MainActivity : AppCompatActivity() {
                 statusText.text = "Open a video before enabling Auto Enhance."
             } else {
                 enhancementEnabled = !enhancementEnabled
-                pendingSeekMs = player?.time?.coerceAtLeast(0L) ?: 0L
                 enhanceButton.text = if (enhancementEnabled) "Enhance: ON" else "Auto Enhance"
-                statusText.text = if (enhancementEnabled) "Applying automatic video enhancement…" else "Automatic enhancement turned off"
-                playVideo(uri, currentVideoName)
+                if (media3Active) {
+                    // The active GLES effect reads this state on its render thread every frame.
+                    activeAnimeShaderEffect?.setEnhancedEnabled(enhancementEnabled)
+                    statusText.text = if (enhancementEnabled) {
+                        "Live shader enhancement ON • stronger edge detail and color contrast"
+                    } else {
+                        "Live shader enhancement OFF • base Anime4K-style filter remains selected"
+                    }
+                } else {
+                    pendingSeekMs = player?.time?.coerceAtLeast(0L) ?: 0L
+                    statusText.text = if (enhancementEnabled) "Applying automatic video enhancement…" else "Automatic enhancement turned off"
+                    playVideo(uri, currentVideoName)
+                }
             }
         }
         uiHandler.post(progressUpdater)
-        detectDeviceRamProfile()
         initializePlayer()
         startThermalMonitoring()
         handleIncomingIntent(intent)
@@ -394,23 +400,6 @@ class MainActivity : AppCompatActivity() {
         } catch (e: Exception) {
             statusText.text = "Could not read phone videos: ${e.javaClass.simpleName}"
         }
-    }
-
-    private fun detectDeviceRamProfile() {
-        val activityManager = getSystemService(ACTIVITY_SERVICE) as? ActivityManager
-        val memoryInfo = android.app.ActivityManager.MemoryInfo()
-        activityManager?.getMemoryInfo(memoryInfo)
-        totalDeviceRamGb = memoryInfo.totalMem.toDouble() / (1024.0 * 1024.0 * 1024.0)
-        animeHighUnlocked = totalDeviceRamGb >= 6.0
-        ramPerformanceProfile = if (animeHighUnlocked) "High" else "Lite"
-        animeShaderMode = 1 // Automatically start in the conservative Lite profile.
-        hdButton.text = "Anime4K: Lite"
-        statusText.text = String.format(
-            Locale.ROOT,
-            "RAM detected: %.1f GB • %s performance profile",
-            totalDeviceRamGb,
-            ramPerformanceProfile
-        )
     }
 
     private fun startThermalMonitoring() {
@@ -593,9 +582,8 @@ class MainActivity : AppCompatActivity() {
                 media.addOption(":gamma=1.0")
             }
             if (hdEnhancementEnabled) {
-                // Moderate sharpening can make edges look crisper, but cannot restore
-                // detail that was never present in a low-resolution source.
-                media.addOption(if (ramPerformanceProfile == "High") ":sharpen-sigma=0.18" else ":sharpen-sigma=0.10")
+                // Fixed moderate sharpening; no device-RAM-based mode restriction.
+                media.addOption(":sharpen-sigma=0.14")
             }
             mediaPlayer.media = media
             media.release()
@@ -638,6 +626,7 @@ class MainActivity : AppCompatActivity() {
                         if (!media3Active) return
                         pendingSeekMs = exoPlayer?.currentPosition?.coerceAtLeast(0L) ?: 0L
                         animeShaderMode = 0
+                        activeAnimeShaderEffect = null
                         hdButton.text = "Anime4K: OFF"
                         media3Active = false
                         statusText.text = "GPU shader playback failed • returning to LibVLC original playback"
@@ -648,7 +637,9 @@ class MainActivity : AppCompatActivity() {
             media3Active = true
             videoLayout.visibility = View.GONE
             media3View.visibility = View.VISIBLE
-            ep.setVideoEffects(listOf(AnimeLineShaderEffect(highQuality = mode == 2)))
+            val shaderEffect = AnimeLineShaderEffect(highQuality = mode == 2, initialEnhancementEnabled = enhancementEnabled)
+            activeAnimeShaderEffect = shaderEffect
+            ep.setVideoEffects(listOf(shaderEffect))
             ep.setMediaItem(MediaItem.fromUri(uri))
             ep.prepare()
             if (pendingSeekMs > 0L) {
@@ -663,6 +654,7 @@ class MainActivity : AppCompatActivity() {
             media3View.visibility = View.GONE
             videoLayout.visibility = View.VISIBLE
             animeShaderMode = 0
+            activeAnimeShaderEffect = null
             hdButton.text = "Anime4K: OFF"
             statusText.text = "GPU shader unavailable • continuing with original LibVLC playback"
             playVideo(uri, name)
@@ -670,24 +662,18 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showAnimeShaderOptions() {
-        val labels = if (animeHighUnlocked) {
-            arrayOf("Off (Original)", "Anime4K Lite", "Anime4K High")
-        } else {
-            arrayOf("Off (Original)", "Anime4K Lite", "Anime4K High • requires 6 GB RAM")
-        }
+        val labels = arrayOf("Off (Original)", "Anime4K Lite", "Anime4K High")
         val selected = animeShaderMode.coerceIn(0, 2)
         MaterialAlertDialogBuilder(this)
-            .setTitle("Video enhancement • " + String.format(Locale.ROOT, "%.1f", totalDeviceRamGb) + " GB RAM")
+            .setTitle("Video enhancement")
             .setSingleChoiceItems(labels, selected) { dialog, which ->
-                if (which == 2 && !animeHighUnlocked) {
-                    statusText.text = "Anime4K High is locked on devices with less than 6 GB RAM."
-                    return@setSingleChoiceItems
-                }
                 if (thermalProtectionActive && which != 0) {
-                    statusText.text = "Enhancement is unavailable while thermal protection is active."
+                    statusText.text = "Enhancement is paused while the device is severely hot."
                     return@setSingleChoiceItems
                 }
                 animeShaderMode = which
+                getSharedPreferences("player_settings", MODE_PRIVATE)
+                    .edit().putInt("anime_shader_mode", which).apply()
                 hdButton.text = when (which) {
                     0 -> "Anime4K: OFF"
                     1 -> "Anime4K: Lite"
@@ -700,10 +686,11 @@ class MainActivity : AppCompatActivity() {
                     } else {
                         player?.time?.coerceAtLeast(0L) ?: 0L
                     }
+                    activeAnimeShaderEffect = null
                     if (which == 0) playVideo(uri, currentVideoName)
                     else playVideoWithGpuEnhancement(uri, currentVideoName, which)
                 } else {
-                    statusText.text = if (which == 0) "Original video mode selected" else "Enhancement profile selected for the next video"
+                    statusText.text = if (which == 0) "Original video mode selected" else "Enhancement profile saved for the next video"
                 }
                 dialog.dismiss()
             }
@@ -1166,6 +1153,7 @@ class MainActivity : AppCompatActivity() {
         player?.stop()
         exoPlayer?.release()
         exoPlayer = null
+        activeAnimeShaderEffect = null
         media3View.player = null
         media3Active = false
         currentVideoFd?.close()
