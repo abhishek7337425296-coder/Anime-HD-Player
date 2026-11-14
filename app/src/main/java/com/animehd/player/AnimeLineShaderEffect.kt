@@ -12,12 +12,12 @@ import androidx.media3.effect.GlEffect
 import androidx.media3.effect.GlShaderProgram
 import java.io.IOException
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 
 /**
- * Original, offline GLES2 line-enhancement shader for anime-style artwork.
- *
- * This is a lightweight edge-aware sharpening/deblurring approximation. It is
- * not the official Anime4K shader suite and does not create AI super-resolution.
+ * Offline GLES2 anime-style edge reconstruction for Media3's 2D frame textures.
+ * This is a custom sharpening approximation, not the official Anime4K shader suite
+ * and not AI super-resolution.
  */
 @UnstableApi
 class AnimeLineShaderEffect(
@@ -25,13 +25,22 @@ class AnimeLineShaderEffect(
     initialEnhancementEnabled: Boolean = false
 ) : GlEffect {
     private val enhancementEnabled = AtomicBoolean(initialEnhancementEnabled)
+    private val scanStartNs = AtomicLong(0L)
 
-    /** Safe to call from the UI thread; the next rendered frame picks up the change. */
+    /** The render thread reads this on each decoded frame; no player restart is needed. */
     fun setEnhancedEnabled(enabled: Boolean) {
         enhancementEnabled.set(enabled)
+        if (!enabled) scanStartNs.set(0L)
     }
+
+    /** Starts a two-second original-vs-enhanced wipe, synchronized to incoming frames. */
+    fun startEnhancementScan() {
+        enhancementEnabled.set(true)
+        scanStartNs.set(System.nanoTime())
+    }
+
     override fun toGlShaderProgram(context: Context, useHdr: Boolean): GlShaderProgram {
-        return AnimeLineShaderProgram(context, useHdr, highQuality, enhancementEnabled)
+        return AnimeLineShaderProgram(context, useHdr, highQuality, enhancementEnabled, scanStartNs)
     }
 
     override fun isNoOp(inputWidth: Int, inputHeight: Int): Boolean = false
@@ -42,7 +51,8 @@ private class AnimeLineShaderProgram(
     context: Context,
     useHdr: Boolean,
     private val highQuality: Boolean,
-    private val enhancementEnabled: AtomicBoolean
+    private val enhancementEnabled: AtomicBoolean,
+    private val scanStartNs: AtomicLong
 ) : BaseGlShaderProgram(useHdr, 1) {
 
     private val fragmentPath = if (highQuality) {
@@ -84,15 +94,26 @@ private class AnimeLineShaderProgram(
             glProgram.use()
             glProgram.setSamplerTexIdUniform("uTexSampler", inputTexId, 0)
             glProgram.setFloatsUniform("uTexelSize", floatArrayOf(texelWidth, texelHeight))
-            val enhanced = enhancementEnabled.get()
+
+            val scanStarted = scanStartNs.get()
+            val scanning = scanStarted != 0L && enhancementEnabled.get()
+            val split = if (scanning) {
+                ((System.nanoTime() - scanStarted).toDouble() / 2_000_000_000.0).toFloat()
+                    .coerceIn(0f, 1f)
+            } else {
+                1f
+            }
+            if (scanning && split >= 1f) scanStartNs.compareAndSet(scanStarted, 0L)
+
+            val enabled = enhancementEnabled.get()
             glProgram.setFloatUniform("uStrength", when {
-                highQuality && enhanced -> 0.78f
-                highQuality -> 0.42f
-                enhanced -> 0.52f
-                else -> 0.22f
+                highQuality -> 2.6f
+                else -> 1.7f
             })
-            glProgram.setFloatUniform("uContrast", if (enhanced) 1.12f else 1.0f)
-            glProgram.setFloatUniform("uSaturation", if (enhanced) 1.18f else 1.0f)
+            glProgram.setFloatUniform("uContrast", if (enabled && highQuality) 1.13f else if (enabled) 1.06f else 1.0f)
+            glProgram.setFloatUniform("uSaturation", if (enabled && highQuality) 1.22f else if (enabled) 1.10f else 1.0f)
+            glProgram.setFloatUniform("uSplitX", split)
+            glProgram.setFloatUniform("uScanActive", if (scanning) 1f else 0f)
             glProgram.bindAttributesAndUniforms()
             GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
             GlUtil.checkGlError()
