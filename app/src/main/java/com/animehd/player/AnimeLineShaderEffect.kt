@@ -36,7 +36,7 @@ class AnimeLineShaderEffect(
     /** Starts a two-second original-vs-enhanced wipe, synchronized to incoming frames. */
     fun startEnhancementScan() {
         enhancementEnabled.set(true)
-        scanStartNs.set(System.nanoTime())
+        // Defer the clock start until the first actual rendered frame, not while buffering.\n        scanStartNs.set(-1L)
     }
 
     override fun toGlShaderProgram(context: Context, useHdr: Boolean): GlShaderProgram {
@@ -95,8 +95,12 @@ private class AnimeLineShaderProgram(
             glProgram.setSamplerTexIdUniform("uTexSampler", inputTexId, 0)
             glProgram.setFloatsUniform("uTexelSize", floatArrayOf(texelWidth, texelHeight))
 
-            val scanStarted = scanStartNs.get()
-            val scanning = scanStarted != 0L && enhancementEnabled.get()
+            var scanStarted = scanStartNs.get()
+            if (scanStarted == -1L) {
+                scanStartNs.compareAndSet(-1L, System.nanoTime())
+                scanStarted = scanStartNs.get()
+            }
+            val scanning = scanStarted > 0L && enhancementEnabled.get()
             val split = if (scanning) {
                 ((System.nanoTime() - scanStarted).toDouble() / 2_000_000_000.0).toFloat()
                     .coerceIn(0f, 1f)
