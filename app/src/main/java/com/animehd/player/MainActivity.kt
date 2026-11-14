@@ -9,6 +9,7 @@ import android.content.pm.ActivityInfo
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.PowerManager
 import android.os.ParcelFileDescriptor
 import android.provider.MediaStore
 import android.provider.OpenableColumns
@@ -134,6 +135,10 @@ class MainActivity : AppCompatActivity() {
     private var gestureStartVolume = 0
     // VLC software gain: 100% is normal device output; up to 200% amplifies in the player.
     private var softwareVolumePercent = 100
+    private var thermalManager: PowerManager? = null
+    private var thermalListener: PowerManager.OnThermalStatusChangedListener? = null
+    private var latestThermalStatus = PowerManager.THERMAL_STATUS_NONE
+    private var thermalProtectionActive = false
     private val hideControlsRunnable = Runnable {
         if (fullscreen && (if (media3Active) exoPlayer?.isPlaying == true else player?.isPlaying == true)) setControlsVisible(false)
     }
@@ -268,6 +273,7 @@ class MainActivity : AppCompatActivity() {
         }
         uiHandler.post(progressUpdater)
         initializePlayer()
+        startThermalMonitoring()
         handleIncomingIntent(intent)
         if (intent?.action == Intent.ACTION_MAIN) requestPhoneVideoAccess()
     }
@@ -391,6 +397,85 @@ class MainActivity : AppCompatActivity() {
         } catch (e: Exception) {
             statusText.text = "Could not read phone videos: ${e.javaClass.simpleName}"
         }
+    }
+
+    private fun startThermalMonitoring() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return
+        val manager = getSystemService(POWER_SERVICE) as? PowerManager ?: return
+        thermalManager = manager
+        latestThermalStatus = manager.currentThermalStatus
+        val listener = PowerManager.OnThermalStatusChangedListener { status ->
+            runOnUiThread {
+                latestThermalStatus = status
+                if (status >= PowerManager.THERMAL_STATUS_SEVERE) {
+                    thermalProtectionActive = true
+                    if (enhancementEnabled || hdEnhancementEnabled) {
+                        val uri = currentVideoUri
+                        pendingSeekMs = player?.time?.coerceAtLeast(0L) ?: 0L
+                        enhancementEnabled = false
+                        hdEnhancementEnabled = false
+                        enhanceButton.text = "Auto Enhance"
+                        hdButton.text = "HD: OFF"
+                        if (uri != null) playVideo(uri, currentVideoName)
+                    }
+                    statusText.text = "Device is very hot • video enhancements paused to reduce heat"
+                } else {
+                    thermalProtectionActive = false
+                    if (status >= PowerManager.THERMAL_STATUS_MODERATE) {
+                        statusText.text = "Device temperature is elevated • consider turning off enhancements"
+                    }
+                }
+            }
+        }
+        thermalListener = listener
+        manager.addThermalStatusListener(listener)
+    }
+
+    private fun stopThermalMonitoring() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            thermalListener?.let { listener ->
+                thermalManager?.removeThermalStatusListener(listener)
+            }
+        }
+        thermalListener = null
+        thermalManager = null
+    }
+
+    private fun thermalStatusLabel(status: Int): String = when (status) {
+        PowerManager.THERMAL_STATUS_NONE -> "Normal"
+        PowerManager.THERMAL_STATUS_LIGHT -> "Light"
+        PowerManager.THERMAL_STATUS_MODERATE -> "Moderate"
+        PowerManager.THERMAL_STATUS_SEVERE -> "Severe"
+        PowerManager.THERMAL_STATUS_CRITICAL -> "Critical"
+        PowerManager.THERMAL_STATUS_EMERGENCY -> "Emergency"
+        PowerManager.THERMAL_STATUS_SHUTDOWN -> "Shutdown level"
+        else -> "Unknown"
+    }
+
+    private fun showDeviceHealthInfo() {
+        val runtime = Runtime.getRuntime()
+        val usedMb = (runtime.totalMemory() - runtime.freeMemory()) / (1024L * 1024L)
+        val maxMb = runtime.maxMemory() / (1024L * 1024L)
+        val thermalText = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            thermalStatusLabel(latestThermalStatus)
+        } else {
+            "Unavailable on Android versions below 10"
+        }
+        val protectionText = if (thermalProtectionActive) {
+            "Thermal protection is active. Video enhancement has been paused."
+        } else {
+            "If the device becomes severely hot, video enhancement will be paused automatically."
+        }
+        MaterialAlertDialogBuilder(this)
+            .setTitle("Device temperature & performance")
+            .setMessage(
+                "Thermal status: $thermalText\n" +
+                "App memory: $usedMb MB used / $maxMb MB limit\n\n" +
+                "$protectionText\n\n" +
+                "This reports Android thermal status and app memory; it is not a benchmark or a measured FPS test."
+            )
+            .setPositiveButton("OK", null)
+            .show()
     }
 
     private fun initializePlayer() {
@@ -733,7 +818,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showPlaybackSettings() {
-        val options = arrayOf("Playback speed", "Player volume (up to 200%)", "Screen brightness", "Reset screen brightness", "Gesture settings")
+        val options = arrayOf("Playback speed", "Player volume (up to 200%)", "Screen brightness", "Reset screen brightness", "Gesture settings", "Device temperature & performance")
         MaterialAlertDialogBuilder(this)
             .setTitle("Playback settings")
             .setItems(options) { _, which ->
@@ -748,6 +833,7 @@ class MainActivity : AppCompatActivity() {
                         statusText.text = "Screen brightness follows device setting"
                     }
                     4 -> showGestureSettings()
+                    5 -> showDeviceHealthInfo()
                 }
             }
             .setNegativeButton("Close", null)
@@ -981,6 +1067,7 @@ class MainActivity : AppCompatActivity() {
     override fun onStop() {
         super.onStop()
         uiHandler.removeCallbacks(progressUpdater)
+        stopThermalMonitoring()
         uiHandler.removeCallbacks(hideControlsRunnable)
         uiHandler.removeCallbacks(hideHudRunnable)
         player?.stop()
