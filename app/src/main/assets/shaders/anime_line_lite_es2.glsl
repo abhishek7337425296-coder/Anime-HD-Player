@@ -4,6 +4,8 @@ precision mediump float;
 uniform sampler2D uTexSampler;
 uniform vec2 uTexelSize;
 uniform float uStrength;
+uniform float uContrast;
+uniform float uSaturation;
 varying vec2 vTexSamplingCoord;
 
 float luma(vec3 c) {
@@ -21,5 +23,8 @@ void main() {
     vec3 localAverage = (leftC + rightC + upC + downC) * 0.25;
     float edge = clamp(abs(luma(center) - luma(localAverage)) * 3.0, 0.0, 1.0);
     vec3 sharpened = center + (center - localAverage) * (uStrength * (0.35 + edge * 0.65));
-    gl_FragColor = vec4(clamp(sharpened, 0.0, 1.0), 1.0);
+    float luminance = luma(sharpened);
+    vec3 vivid = mix(vec3(luminance), sharpened, uSaturation);
+    vec3 contrasted = (vivid - vec3(0.5)) * uContrast + vec3(0.5);
+    gl_FragColor = vec4(clamp(contrasted, 0.0, 1.0), 1.0);
 }
