@@ -79,9 +79,6 @@ class MainActivity : AppCompatActivity() {
     private lateinit var emptyMessage: TextView
     private lateinit var rootLayout: android.widget.LinearLayout
     private lateinit var titleView: TextView
-    private lateinit var openVideoButton: MaterialButton
-    private lateinit var storageButton: MaterialButton
-    private lateinit var episodesButton: MaterialButton
     private lateinit var audioButton: MaterialButton
     private lateinit var enhanceButton: MaterialButton
     private lateinit var hdButton: MaterialButton
@@ -174,9 +171,6 @@ class MainActivity : AppCompatActivity() {
         settingsButton = findViewById(R.id.settingsButton)
         statusText = findViewById(R.id.statusText)
         emptyMessage = findViewById(R.id.emptyMessage)
-        openVideoButton = findViewById(R.id.openVideoButton)
-        storageButton = findViewById(R.id.folderButton)
-        episodesButton = findViewById(R.id.episodesButton)
         audioButton = findViewById(R.id.audioButton)
         enhanceButton = findViewById(R.id.enhanceButton)
         hdButton = findViewById(R.id.hdButton)
@@ -243,9 +237,6 @@ class MainActivity : AppCompatActivity() {
             }
         })
         backButton.setOnClickListener { player?.stop(); exoPlayer?.pause(); exitFullscreen() }
-        openVideoButton.setOnClickListener { openVideo.launch(arrayOf("video/*")) }
-        storageButton.setOnClickListener { requestPhoneVideoAccess() }
-        episodesButton.setOnClickListener { showEpisodes() }
         audioButton.setOnClickListener { showTrackOptions(); revealControls() }
         hdButton.setOnClickListener {
             val uri = currentVideoUri
@@ -568,9 +559,6 @@ class MainActivity : AppCompatActivity() {
         videoGrid.visibility = android.view.View.GONE
         videoContainer.visibility = android.view.View.VISIBLE
         emptyMessage.visibility = android.view.View.GONE
-        openVideoButton.visibility = android.view.View.GONE
-        storageButton.visibility = android.view.View.GONE
-        episodesButton.visibility = android.view.View.GONE
         statusText.visibility = View.GONE
         rootLayout.setPadding(0, 0, 0, 0)
         setControlsVisible(true)
@@ -590,9 +578,6 @@ class MainActivity : AppCompatActivity() {
         videoContainer.visibility = android.view.View.GONE
         videoGrid.visibility = android.view.View.VISIBLE
         emptyMessage.visibility = android.view.View.VISIBLE
-        openVideoButton.visibility = android.view.View.VISIBLE
-        storageButton.visibility = android.view.View.VISIBLE
-        episodesButton.visibility = android.view.View.VISIBLE
         statusText.visibility = View.VISIBLE
         rootLayout.setPadding(16, 16, 16, 16)
         WindowInsetsControllerCompat(window, window.decorView).show(WindowInsetsCompat.Type.systemBars())
