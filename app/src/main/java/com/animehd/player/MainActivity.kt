@@ -1,6 +1,7 @@
 package com.animehd.player
 
 import android.Manifest
+import android.app.ActivityManager
 import android.content.ContentUris
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -139,6 +140,10 @@ class MainActivity : AppCompatActivity() {
     private var thermalListener: PowerManager.OnThermalStatusChangedListener? = null
     private var latestThermalStatus = PowerManager.THERMAL_STATUS_NONE
     private var thermalProtectionActive = false
+    // Device RAM is used only to select a conservative conventional-sharpening profile.
+    // This is not an Anime4K implementation or AI upscaling.
+    private var totalDeviceRamGb = 0.0
+    private var ramPerformanceProfile = "Lite"
     private val hideControlsRunnable = Runnable {
         if (fullscreen && (if (media3Active) exoPlayer?.isPlaying == true else player?.isPlaying == true)) setControlsVisible(false)
     }
@@ -272,6 +277,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
         uiHandler.post(progressUpdater)
+        detectDeviceRamProfile()
         initializePlayer()
         startThermalMonitoring()
         handleIncomingIntent(intent)
@@ -397,6 +403,20 @@ class MainActivity : AppCompatActivity() {
         } catch (e: Exception) {
             statusText.text = "Could not read phone videos: ${e.javaClass.simpleName}"
         }
+    }
+
+    private fun detectDeviceRamProfile() {
+        val activityManager = getSystemService(ACTIVITY_SERVICE) as? ActivityManager
+        val memoryInfo = android.app.ActivityManager.MemoryInfo()
+        activityManager?.getMemoryInfo(memoryInfo)
+        totalDeviceRamGb = memoryInfo.totalMem.toDouble() / (1024.0 * 1024.0 * 1024.0)
+        ramPerformanceProfile = if (totalDeviceRamGb >= 6.0) "High" else "Lite"
+        statusText.text = String.format(
+            Locale.ROOT,
+            "RAM detected: %.1f GB • %s performance profile",
+            totalDeviceRamGb,
+            ramPerformanceProfile
+        )
     }
 
     private fun startThermalMonitoring() {
@@ -572,7 +592,7 @@ class MainActivity : AppCompatActivity() {
             if (hdEnhancementEnabled) {
                 // Moderate sharpening can make edges look crisper, but cannot restore
                 // detail that was never present in a low-resolution source.
-                media.addOption(":sharpen-sigma=0.18")
+                media.addOption(if (ramPerformanceProfile == "High") ":sharpen-sigma=0.18" else ":sharpen-sigma=0.10")
             }
             mediaPlayer.media = media
             media.release()
@@ -971,8 +991,26 @@ class MainActivity : AppCompatActivity() {
 
     private fun friendlyTrackName(raw: String?, fallback: String): String {
         val value = raw.orEmpty()
-        val languageCodes = mapOf("te" to "Telugu", "ta" to "Tamil", "hi" to "Hindi", "en" to "English", "ja" to "Japanese", "ko" to "Korean", "zh" to "Chinese")
-        languageCodes[value.lowercase(Locale.ROOT).substringBefore('-')]?.let { return it }
+        val normalizedCode = value.trim().lowercase(Locale.ROOT)
+            .substringBefore(',').substringBefore(';').substringBefore('-')
+        val languageCodes = mapOf(
+            "te" to "Telugu", "tel" to "Telugu",
+            "ta" to "Tamil", "tam" to "Tamil",
+            "hi" to "Hindi", "hin" to "Hindi",
+            "en" to "English", "eng" to "English",
+            "ja" to "Japanese", "jpn" to "Japanese",
+            "ko" to "Korean", "kor" to "Korean",
+            "zh" to "Chinese", "zho" to "Chinese", "chi" to "Chinese",
+            "es" to "Spanish", "spa" to "Spanish",
+            "fr" to "French", "fra" to "French", "fre" to "French",
+            "de" to "German", "deu" to "German", "ger" to "German",
+            "ar" to "Arabic", "ara" to "Arabic",
+            "pt" to "Portuguese", "por" to "Portuguese",
+            "ru" to "Russian", "rus" to "Russian",
+            "it" to "Italian", "ita" to "Italian",
+            "und" to "Unknown language", "zxx" to "No spoken language"
+        )
+        languageCodes[normalizedCode]?.let { return it }
         val known = listOf("Telugu", "Tamil", "Hindi", "English", "Japanese", "Korean", "Chinese", "Spanish", "French", "German", "Arabic", "Portuguese", "Russian")
         known.firstOrNull { value.contains(it, ignoreCase = true) }?.let { return it }
         val cleaned = value.substringBefore(",").substringAfterLast(" - ")
