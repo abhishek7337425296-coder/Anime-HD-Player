@@ -63,6 +63,12 @@
             app:use_controller="false"
             app:resize_mode="fit" />
 
+        <com.animehd.player.LibVlcShaderView
+            android:id="@+id/libVlcShaderView"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:background="#000000" />
+
         <LinearLayout
             android:id="@+id/playerOverlay"
             android:layout_width="match_parent"
@@ -73,6 +79,22 @@
             android:clickable="true"
             android:focusable="true"
             android:padding="12dp">
+
+            <TextView
+                android:id="@+id/shaderStatusBadge"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="GL Shader: Anime4K High"
+                android:textColor="#FFFFFFFF"
+                android:textSize="11sp"
+                android:textStyle="bold"
+                android:background="#CC102A35"
+                android:paddingStart="10dp"
+                android:paddingEnd="10dp"
+                android:paddingTop="5dp"
+                android:paddingBottom="5dp"
+                android:layout_gravity="start"
+                android:visibility="gone" />
 
             <LinearLayout
                 android:layout_width="match_parent"

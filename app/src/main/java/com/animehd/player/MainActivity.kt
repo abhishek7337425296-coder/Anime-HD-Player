@@ -50,6 +50,9 @@ import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import org.videolan.libvlc.LibVLC
 import org.videolan.libvlc.Media
 import org.videolan.libvlc.MediaPlayer
+import org.videolan.libvlc.interfaces.IVLCVout
+import android.view.Surface
+import android.animation.ValueAnimator
 import org.videolan.libvlc.util.VLCVideoLayout
 import java.math.BigInteger
 import java.util.Locale
@@ -59,6 +62,12 @@ class MainActivity : AppCompatActivity() {
     private var player: MediaPlayer? = null
     private var currentVideoFd: ParcelFileDescriptor? = null
     private lateinit var videoLayout: VLCVideoLayout
+    private lateinit var shaderView: LibVlcShaderView
+    private lateinit var shaderStatusBadge: TextView
+    private var shaderSurface: Surface? = null
+    private var shaderAttached = false
+    private var shaderFailed = false
+    private var scanAnimator: ValueAnimator? = null
     private lateinit var media3View: PlayerView
     private var exoPlayer: ExoPlayer? = null
     private var media3Active = false
@@ -163,6 +172,19 @@ class MainActivity : AppCompatActivity() {
         rootLayout = findViewById(R.id.rootLayout)
         titleView = findViewById(R.id.titleView)
         videoLayout = findViewById(R.id.playerView)
+        shaderView = findViewById(R.id.libVlcShaderView)
+        shaderStatusBadge = findViewById(R.id.shaderStatusBadge)
+        videoLayout.visibility = View.GONE
+        shaderView.callback = object : LibVlcShaderView.Callback {
+            override fun onSurfaceReady(surface: Surface) { shaderSurface = surface; shaderFailed = false; attachLibVlcToShaderSurface() }
+            override fun onRendererError(message: String) { activateVlcFallback("GL renderer failed: $message") }
+            override fun onSurfaceReleased() {
+                if (shaderAttached) {
+                    try { player?.vlcVout?.detachViews() } catch (_: Exception) { }
+                    shaderAttached = false
+                }
+            }
+        }
         media3View = findViewById(R.id.media3PlayerView)
         media3View.useController = false
         media3View.visibility = View.GONE
@@ -253,29 +275,15 @@ class MainActivity : AppCompatActivity() {
             revealControls()
         }
         enhanceButton.setOnClickListener {
-            val uri = currentVideoUri
-            if (uri == null) {
-                statusText.text = "Open a video before enabling Auto Enhance."
-            } else {
-                enhancementEnabled = !enhancementEnabled
-                enhanceButton.text = if (enhancementEnabled) "Enhance: ON" else "Auto Enhance"
-                if (enhancementEnabled) {
-                    // Auto Enhance selects High and runs the two-second comparison wipe.
-                    animeShaderMode = 2
-                    getSharedPreferences("player_settings", MODE_PRIVATE)
-                        .edit().putInt("anime_shader_mode", animeShaderMode).apply()
-                    hdButton.text = "Anime4K: High"
-                    pendingSeekMs = if (media3Active) {
-                        exoPlayer?.currentPosition?.coerceAtLeast(0L) ?: 0L
-                    } else {
-                        player?.time?.coerceAtLeast(0L) ?: 0L
-                    }
-                    playVideoWithGpuEnhancement(uri, currentVideoName, 2, startScan = true)
-                } else {
-                    activeAnimeShaderEffect?.setEnhancedEnabled(false)
-                    statusText.text = "Auto Enhancement off • selected Anime4K profile remains active"
-                }
+            if (currentVideoUri == null) statusText.text = "Open a video before enabling Auto Enhance."
+            else if (thermalProtectionActive) statusText.text = "Enhancement is paused while the device is severely hot."
+            else {
+                enhancementEnabled = true; animeShaderMode = 2
+                getSharedPreferences("player_settings", MODE_PRIVATE).edit().putInt("anime_shader_mode", 2).apply()
+                hdButton.text = "Anime4K: High"; enhanceButton.text = "Enhance: ON"
+                applyShaderMode(2, runScan = true)
             }
+            revealControls()
         }
         uiHandler.post(progressUpdater)
         initializePlayer()
@@ -415,23 +423,14 @@ class MainActivity : AppCompatActivity() {
                 latestThermalStatus = status
                 if (status >= PowerManager.THERMAL_STATUS_SEVERE) {
                     thermalProtectionActive = true
-                    if (enhancementEnabled || hdEnhancementEnabled || animeShaderMode > 0) {
-                        val uri = currentVideoUri
-                        pendingSeekMs = if (media3Active) {
-                            exoPlayer?.currentPosition?.coerceAtLeast(0L) ?: 0L
-                        } else {
-                            player?.time?.coerceAtLeast(0L) ?: 0L
-                        }
-                        enhancementEnabled = false
-                        hdEnhancementEnabled = false
-                        animeShaderMode = 0
-                        enhanceButton.text = "Auto Enhance"
-                        hdButton.text = "Anime4K: OFF"
-                        if (uri != null) playVideo(uri, currentVideoName)
+                    if (animeShaderMode > 0) {
+                        scanAnimator?.cancel(); shaderView.setMode(0); shaderView.setScanX(1f); updateShaderBadge()
                     }
-                    statusText.text = "Device is very hot • video enhancements paused to reduce heat"
+                    statusText.text = "Device is very hot • video enhancement temporarily paused"
                 } else {
+                    val wasProtected = thermalProtectionActive
                     thermalProtectionActive = false
+                    if (wasProtected && animeShaderMode > 0) { applyShaderMode(animeShaderMode); statusText.text = "Device temperature improved • selected GL shader restored" }
                     if (status >= PowerManager.THERMAL_STATUS_MODERATE) {
                         statusText.text = "Device temperature is elevated • consider turning off enhancements"
                     }
@@ -490,34 +489,21 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun initializePlayer() {
-        if (player != null) return
+        if (player != null) { attachLibVlcToShaderSurface(); return }
         try {
             val vlc = LibVLC(this, arrayListOf("--audio-time-stretch", "--no-video-title-show"))
             libVLC = vlc
-            player = MediaPlayer(vlc).also { mediaPlayer ->
-                mediaPlayer.attachViews(videoLayout, null, false, false)
-                mediaPlayer.setEventListener { event ->
+            player = MediaPlayer(vlc).also { mp ->
+                mp.setEventListener { event ->
                     runOnUiThread {
                         when (event.type) {
                             MediaPlayer.Event.Opening -> statusText.text = "Opening video…"
                             MediaPlayer.Event.Buffering -> statusText.text = "Buffering…"
                             MediaPlayer.Event.Playing -> {
-                                // Always fit the full video frame; HD Enhance must never change its size.
-                                mediaPlayer.setScale(0f)
-                                hdButton.text = if (hdEnhancementEnabled) "HD: ON" else "HD: OFF"
-                                statusText.text = when {
-                                    hdEnhancementEnabled && enhancementEnabled -> "Sharpening + color enhancement active • software decoding"
-                                    hdEnhancementEnabled -> "Edge sharpening active • source resolution unchanged"
-                                    enhancementEnabled -> "Color enhancement active • software decoding"
-                                    else -> "Playing • VLC engine • Offline • No ads"
-                                }
-                                scheduleHideControls()
-                                playPauseButton.text = "Ⅱ"
-                                if (pendingSeekMs > 0L) {
-                                    val restoreAt = pendingSeekMs
-                                    pendingSeekMs = 0L
-                                    mediaPlayer.time = restoreAt.coerceAtMost(mediaPlayer.length.coerceAtLeast(0L))
-                                }
+                                mp.setScale(0f); mp.setVolume(softwareVolumePercent); updateShaderBadge()
+                                statusText.text = if (animeShaderMode == 0 || thermalProtectionActive) "Playing • LibVLC • Offline • No ads" else "Custom offline GL shader active • LibVLC playback"
+                                scheduleHideControls(); playPauseButton.text = "Ⅱ"
+                                if (pendingSeekMs > 0L) { val restoreAt = pendingSeekMs; pendingSeekMs = 0L; mp.time = restoreAt.coerceAtMost(mp.length.coerceAtLeast(0L)) }
                             }
                             MediaPlayer.Event.Paused -> { statusText.text = "Paused"; playPauseButton.text = "▶" }
                             MediaPlayer.Event.EndReached -> statusText.text = "Playback finished"
@@ -526,190 +512,94 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
             }
-        } catch (e: Exception) {
-            statusText.text = "Could not start VLC engine: ${e.javaClass.simpleName}"
-        }
+            attachLibVlcToShaderSurface()
+        } catch (e: Exception) { statusText.text = "Could not start VLC engine: ${e.javaClass.simpleName}" }
+    }
+
+    private fun attachLibVlcToShaderSurface() {
+        val mp = player ?: return
+        val surface = shaderSurface ?: return
+        if (shaderFailed || shaderAttached) return
+        try {
+            mp.vlcVout.setVideoSurface(surface, null)
+            mp.vlcVout.attachViews(object : IVLCVout.OnNewVideoLayoutListener {
+                override fun onNewVideoLayout(vout: IVLCVout, width: Int, height: Int, visibleWidth: Int, visibleHeight: Int, sarNum: Int, sarDen: Int) {
+                    runOnUiThread { shaderView.setVideoSize(width, height, visibleWidth, visibleHeight, sarNum, sarDen) }
+                }
+            })
+            shaderAttached = true; videoLayout.visibility = View.GONE; shaderView.visibility = View.VISIBLE
+            shaderView.setMode(if (thermalProtectionActive) 0 else animeShaderMode); updateShaderBadge()
+        } catch (e: Exception) { activateVlcFallback("Could not attach GL surface: ${e.message ?: e.javaClass.simpleName}") }
+    }
+
+    private fun activateVlcFallback(reason: String) {
+        if (shaderFailed) return
+        shaderFailed = true
+        try { player?.vlcVout?.detachViews() } catch (_: Exception) { }
+        shaderAttached = false; shaderView.visibility = View.GONE; shaderStatusBadge.visibility = View.GONE
+        videoLayout.visibility = View.VISIBLE
+        try { player?.attachViews(videoLayout, null, false, false) }
+        catch (_: Exception) { statusText.text = "GL renderer and VLC fallback unavailable."; return }
+        statusText.text = "$reason • using standard LibVLC video output"
+    }
+
+    private fun updateShaderBadge() {
+        val active = if (thermalProtectionActive) 0 else animeShaderMode
+        if (shaderFailed || active == 0) shaderStatusBadge.visibility = View.GONE
+        else { shaderStatusBadge.text = if (active == 1) "GL Shader: Anime4K Lite" else "GL Shader: Anime4K High"; shaderStatusBadge.visibility = View.VISIBLE }
+    }
+
+    private fun applyShaderMode(mode: Int, runScan: Boolean = false) {
+        animeShaderMode = mode.coerceIn(0, 2)
+        shaderView.setMode(if (thermalProtectionActive) 0 else animeShaderMode)
+        scanAnimator?.cancel()
+        if (runScan && animeShaderMode > 0 && !thermalProtectionActive) {
+            shaderView.setScanX(0f)
+            scanAnimator = ValueAnimator.ofFloat(0f, 1f).apply {
+                duration = 2_000L
+                addUpdateListener { shaderView.setScanX(it.animatedValue as Float) }
+                start()
+            }
+        } else shaderView.setScanX(1f)
+        updateShaderBadge()
     }
 
     private fun playVideo(uri: Uri, name: String) {
-        if (animeShaderMode > 0 && !thermalProtectionActive) {
-            playVideoWithGpuEnhancement(uri, name, animeShaderMode)
-            return
-        }
-        // Keep original playback on the stable LibVLC decoder path.
-        // The Media3/OpenGL path caused a black video and lost audio on some devices
-        // (including the reported SM-T220). VLC's built-in sharpen filter is applied
-        // below when HD is enabled, avoiding an engine switch during playback.
-        media3Active = false
-        media3View.visibility = View.GONE
-        videoLayout.visibility = View.VISIBLE
-        exoPlayer?.pause()
         initializePlayer()
-        val vlc = libVLC
-        val mediaPlayer = player
-        if (vlc == null || mediaPlayer == null) {
-            statusText.text = "Player engine did not start. Please reopen the app."
-            return
-        }
-        currentVideoUri = uri
-        currentVideoName = name
-        emptyMessage.text = name
-        enterFullscreen()
+        val vlc = libVLC; val mp = player
+        if (vlc == null || mp == null) { statusText.text = "Player engine did not start. Please reopen the app."; return }
+        currentVideoUri = uri; currentVideoName = name; emptyMessage.text = name; enterFullscreen()
         try {
-            mediaPlayer.stop()
-            currentVideoFd?.close()
-            currentVideoFd = null
-
-            // LibVLC cannot reliably read every Android content:// provider URI
-            // directly. Open it through Android's ContentResolver and pass VLC
-            // an fd:// media URI while keeping the descriptor alive.
-            val descriptor = contentResolver.openFileDescriptor(uri, "r")
-                ?: throw IllegalStateException("Android could not open this video")
+            mp.stop(); currentVideoFd?.close(); currentVideoFd = null
+            val descriptor = contentResolver.openFileDescriptor(uri, "r") ?: throw IllegalStateException("Android could not open this video")
             currentVideoFd = descriptor
             val media = Media(vlc, descriptor.fileDescriptor)
-            // VLC's video filters require software decoding on this playback path.
-            // Keep the frame fitted to the view; sharpening is independent of display scale.
-            val filters = mutableListOf<String>()
-            if (enhancementEnabled) filters.add("adjust")
-            if (hdEnhancementEnabled) filters.add("sharpen")
-            val processingEnabled = filters.isNotEmpty()
-            media.setHWDecoderEnabled(!processingEnabled, false)
-            if (processingEnabled) {
-                media.addOption(":video-filter=${filters.joinToString(",")}")
-            }
-            if (enhancementEnabled) {
-                // Preserve the existing Auto Enhance settings unchanged.
-                media.addOption(":contrast=1.40")
-                media.addOption(":brightness=1.08")
-                media.addOption(":saturation=1.35")
-                media.addOption(":gamma=1.0")
-            }
-            if (hdEnhancementEnabled) {
-                // Fixed moderate sharpening; no device-RAM-based mode restriction.
-                media.addOption(":sharpen-sigma=0.14")
-            }
-            mediaPlayer.media = media
-            media.release()
-            mediaPlayer.play()
-        } catch (e: Exception) {
-            currentVideoFd?.close()
-            currentVideoFd = null
-            statusText.text = "Could not open video: ${e.message ?: e.javaClass.simpleName}"
-        }
+            media.setHWDecoderEnabled(true, false)
+            mp.media = media; media.release(); mp.setVolume(softwareVolumePercent)
+            applyShaderMode(if (thermalProtectionActive) 0 else animeShaderMode)
+            mp.play()
+        } catch (e: Exception) { currentVideoFd?.close(); currentVideoFd = null; statusText.text = "Could not open video: ${e.message ?: e.javaClass.simpleName}" }
     }
 
-    @OptIn(UnstableApi::class)
     private fun playVideoWithGpuEnhancement(uri: Uri, name: String, mode: Int, startScan: Boolean = false) {
-        currentVideoUri = uri
-        currentVideoName = name
-        emptyMessage.text = name
-        enterFullscreen()
-        try {
-            initializePlayer()
-            player?.stop()
-            currentVideoFd?.close()
-            currentVideoFd = null
-            val ep = exoPlayer ?: ExoPlayer.Builder(this).build().also { built ->
-                exoPlayer = built
-                media3View.player = built
-                built.addListener(object : Player.Listener {
-                    override fun onPlaybackStateChanged(playbackState: Int) {
-                        if (!media3Active) return
-                        when (playbackState) {
-                            Player.STATE_BUFFERING -> statusText.text = "GPU shader: buffering…"
-                            Player.STATE_READY -> {
-                                val profile = if (mode == 2) "Anime4K High" else "Anime4K Lite"
-                                statusText.text = "$profile-like edge sharpening active • custom offline GLES shader, not official Anime4K or AI upscaling"
-                                scheduleHideControls()
-                            }
-                            Player.STATE_ENDED -> statusText.text = "Playback finished"
-                        }
-                    }
-                    override fun onPlayerError(error: PlaybackException) {
-                        if (!media3Active) return
-                        pendingSeekMs = exoPlayer?.currentPosition?.coerceAtLeast(0L) ?: 0L
-                        animeShaderMode = 0
-                        activeAnimeShaderEffect = null
-                        hdButton.text = "Anime4K: OFF"
-                        media3Active = false
-                        statusText.text = "GPU shader playback failed • returning to LibVLC original playback"
-                        currentVideoUri?.let { playVideo(it, currentVideoName) }
-                    }
-                })
-            }
-            media3Active = true
-            videoLayout.visibility = View.GONE
-            media3View.visibility = View.VISIBLE
-            val shaderEffect = AnimeLineShaderEffect(highQuality = mode == 2, initialEnhancementEnabled = enhancementEnabled)
-            activeAnimeShaderEffect = shaderEffect
-            if (startScan) shaderEffect.startEnhancementScan()
-            ep.setVideoEffects(listOf(shaderEffect))
-            ep.setMediaItem(MediaItem.fromUri(uri))
-            ep.prepare()
-            if (pendingSeekMs > 0L) {
-                ep.seekTo(pendingSeekMs)
-                pendingSeekMs = 0L
-            }
-            ep.playWhenReady = true
-            hdButton.text = if (mode == 2) "Anime4K: High" else "Anime4K: Lite"
-            statusText.text = "Starting custom offline OpenGL ES line shader…"
-        } catch (e: Exception) {
-            media3Active = false
-            media3View.visibility = View.GONE
-            videoLayout.visibility = View.VISIBLE
-            animeShaderMode = 0
-            activeAnimeShaderEffect = null
-            hdButton.text = "Anime4K: OFF"
-            statusText.text = "GPU shader unavailable • continuing with original LibVLC playback"
-            playVideo(uri, name)
-        }
+        currentVideoUri = uri; currentVideoName = name
+        applyShaderMode(mode, runScan = startScan)
     }
 
     private fun showAnimeShaderOptions() {
         val labels = arrayOf("Off (Original)", "Anime4K Lite", "Anime4K High")
-        val selected = animeShaderMode.coerceIn(0, 2)
-        MaterialAlertDialogBuilder(this)
-            .setTitle("Video enhancement")
-            .setSingleChoiceItems(labels, selected) { dialog, which ->
-                if (thermalProtectionActive && which != 0) {
-                    statusText.text = "Enhancement is paused while the device is severely hot."
-                    return@setSingleChoiceItems
-                }
+        MaterialAlertDialogBuilder(this).setTitle("Video enhancement")
+            .setSingleChoiceItems(labels, animeShaderMode.coerceIn(0, 2)) { dialog, which ->
+                if (thermalProtectionActive && which != 0) { statusText.text = "Enhancement is paused while the device is severely hot."; return@setSingleChoiceItems }
                 animeShaderMode = which
-                getSharedPreferences("player_settings", MODE_PRIVATE)
-                    .edit().putInt("anime_shader_mode", which).apply()
-                hdButton.text = when (which) {
-                    0 -> "Anime4K: OFF"
-                    1 -> "Anime4K: Lite"
-                    else -> "Anime4K: High"
-                }
-                val uri = currentVideoUri
-                if (uri != null) {
-                    pendingSeekMs = if (media3Active) {
-                        exoPlayer?.currentPosition?.coerceAtLeast(0L) ?: 0L
-                    } else {
-                        player?.time?.coerceAtLeast(0L) ?: 0L
-                    }
-                    activeAnimeShaderEffect = null
-                    if (which == 0) {
-                        enhancementEnabled = false
-                        enhanceButton.text = "Auto Enhance"
-                        playVideo(uri, currentVideoName)
-                    } else {
-                        val runScan = which == 2
-                        if (runScan) {
-                            enhancementEnabled = true
-                            enhanceButton.text = "Enhance: ON"
-                        }
-                        playVideoWithGpuEnhancement(uri, currentVideoName, which, startScan = runScan)
-                    }
-                } else {
-                    statusText.text = if (which == 0) "Original video mode selected" else "Enhancement profile saved for the next video"
-                }
+                getSharedPreferences("player_settings", MODE_PRIVATE).edit().putInt("anime_shader_mode", which).apply()
+                hdButton.text = when (which) { 0 -> "Anime4K: OFF"; 1 -> "Anime4K: Lite"; else -> "Anime4K: High" }
+                enhancementEnabled = which == 2
+                enhanceButton.text = if (which == 2) "Enhance: ON" else "Auto Enhance"
+                applyShaderMode(which, runScan = which == 2)
+                if (currentVideoUri == null) statusText.text = if (which == 0) "Original video mode selected" else "Enhancement profile saved for the next video"
                 dialog.dismiss()
-            }
-            .setNegativeButton("Close", null)
-            .show()
+            }.setNegativeButton("Close", null).show()
     }
 
     private fun enterFullscreen() {
@@ -979,7 +869,7 @@ class MainActivity : AppCompatActivity() {
         MaterialAlertDialogBuilder(this)
             .setTitle("Playback speed")
             .setItems(speeds) { _, which ->
-                if (media3Active) exoPlayer?.setPlaybackSpeed(rates[which]) else player?.setRate(rates[which])
+                player?.setRate(rates[which])
                 statusText.text = "Playback speed: ${speeds[which]}"
             }
             .setNegativeButton("Close", null)
@@ -1155,7 +1045,16 @@ class MainActivity : AppCompatActivity() {
 
     override fun onStart() {
         super.onStart()
+        shaderView.onResume()
         initializePlayer()
+        attachLibVlcToShaderSurface()
+    }
+
+    override fun onPause() {
+        try { if (shaderAttached) player?.vlcVout?.detachViews() } catch (_: Exception) { }
+        shaderAttached = false
+        shaderView.onPause()
+        super.onPause()
     }
 
     override fun onStop() {
@@ -1172,7 +1071,9 @@ class MainActivity : AppCompatActivity() {
         media3Active = false
         currentVideoFd?.close()
         currentVideoFd = null
+        try { player?.vlcVout?.detachViews() } catch (_: Exception) { }
         player?.detachViews()
+        scanAnimator?.cancel()
         player?.release()
         player = null
         libVLC?.release()
