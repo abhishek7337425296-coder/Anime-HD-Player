@@ -662,7 +662,10 @@ class MainActivity : AppCompatActivity() {
             media3Active = false
             media3View.visibility = View.GONE
             videoLayout.visibility = View.VISIBLE
-            statusText.text = "GPU enhancement could not start: ${e.message ?: e.javaClass.simpleName}. Turn HD off for VLC playback."
+            animeShaderMode = 0
+            hdButton.text = "Anime4K: OFF"
+            statusText.text = "GPU shader unavailable • continuing with original LibVLC playback"
+            playVideo(uri, name)
         }
     }
 
