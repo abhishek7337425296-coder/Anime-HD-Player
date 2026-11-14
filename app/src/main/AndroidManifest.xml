@@ -5,6 +5,7 @@
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
     <application
         android:allowBackup="false"
+        android:largeHeap="true"
         android:label="Anime HD Player"
         android:icon="@drawable/ic_uchiha_clan"
         android:supportsRtl="true"
