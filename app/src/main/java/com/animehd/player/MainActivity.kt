@@ -423,7 +423,7 @@ class MainActivity : AppCompatActivity() {
                 latestThermalStatus = status
                 if (status >= PowerManager.THERMAL_STATUS_SEVERE) {
                     thermalProtectionActive = true
-                    if (enhancementEnabled || hdEnhancementEnabled) {
+                    if (enhancementEnabled || hdEnhancementEnabled || animeShaderMode > 0) {
                         val uri = currentVideoUri
                         pendingSeekMs = if (media3Active) {
                             exoPlayer?.currentPosition?.coerceAtLeast(0L) ?: 0L
@@ -628,7 +628,7 @@ class MainActivity : AppCompatActivity() {
                             Player.STATE_BUFFERING -> statusText.text = "GPU shader: buffering…"
                             Player.STATE_READY -> {
                                 val profile = if (mode == 2) "Anime4K High" else "Anime4K Lite"
-                                statusText.text = "$profile-style edge sharpening active • custom offline GLES shader"
+                                statusText.text = "$profile-like edge sharpening active • custom offline GLES shader, not official Anime4K or AI upscaling"
                                 scheduleHideControls()
                             }
                             Player.STATE_ENDED -> statusText.text = "Playback finished"
