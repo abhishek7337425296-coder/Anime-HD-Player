@@ -691,8 +691,18 @@ class MainActivity : AppCompatActivity() {
                         player?.time?.coerceAtLeast(0L) ?: 0L
                     }
                     activeAnimeShaderEffect = null
-                    if (which == 0) playVideo(uri, currentVideoName)
-                    else playVideoWithGpuEnhancement(uri, currentVideoName, which)
+                    if (which == 0) {
+                        enhancementEnabled = false
+                        enhanceButton.text = "Auto Enhance"
+                        playVideo(uri, currentVideoName)
+                    } else {
+                        val runScan = which == 2
+                        if (runScan) {
+                            enhancementEnabled = true
+                            enhanceButton.text = "Enhance: ON"
+                        }
+                        playVideoWithGpuEnhancement(uri, currentVideoName, which, startScan = runScan)
+                    }
                 } else {
                     statusText.text = if (which == 0) "Original video mode selected" else "Enhancement profile saved for the next video"
                 }
